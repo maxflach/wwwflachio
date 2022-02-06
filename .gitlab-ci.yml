@@ -7,10 +7,10 @@ variables:
   TAG_COMMIT: $CI_REGISTRY_IMAGE/$CI_COMMIT_REF_NAME:$CI_COMMIT_SHORT_SHA
 
 build:
-  image: docker:latest  
+  image: docker:latest
   stage: build
   tags:
-    - mini
+    - deployment
   script:
     - echo "Building"
     - docker build -t $TAG_COMMIT -t $TAG_LATEST .
@@ -19,10 +19,10 @@ build:
     - docker push $TAG_LATEST
 
 deploy:
-  image: docker:latest  
+  image: docker:latest
   stage: deploy
   tags:
-    - mini
+    - deployment
   script:
     - echo "Deploying"
     - chmod og= $ID_RSA
