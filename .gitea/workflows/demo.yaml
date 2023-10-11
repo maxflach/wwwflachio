@@ -15,6 +15,9 @@ jobs:
       - run: echo "💡 The ${{ gitea.sha }} repository has been cloned to the runner."
       - run: echo "🖥️ The workflow is now ready to test your code on the runner."
       - run: pwd
+      - name: Declare variables
+        run: |
+          echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - name: show env
         run: export
       - name: Build docker
@@ -22,7 +25,7 @@ jobs:
           docker build -t ${{ gitea.repository }}:${{ gitea.sha }} -t ${{ gitea.repository }}:latest .
       - name: Start docker
         run: |
-          docker run -d --network=web --restart unless-stopped --name ${{ gitea.repository }} ${{ gitea.repository }}:${{ gitea.sha }}
+          docker run -d --network=web --restart unless-stopped --name testweb ${{ gitea.repository }}:${{ gitea.sha }}
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
