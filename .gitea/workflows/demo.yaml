@@ -25,10 +25,10 @@ jobs:
         run: export
       - name: Build docker
         run: |
-          docker build -t ${{ gitea.repository }}:${{ gitea.sha }} -t ${{ gitea.repository }}:latest .
+          docker build -t ${{ gitea.repository }}:${{ env.sha_short }} -t ${{ gitea.repository }}:latest .
       - name: Start docker
         run: |
-          docker run -d --network=web --restart unless-stopped --name testweb ${{ gitea.repository }}:${{ gitea.sha }}
+          docker run -d --network=web --restart unless-stopped --name testweb ${{ gitea.repository }}:${{ env.sha_short }}
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
