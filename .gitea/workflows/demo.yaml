@@ -6,21 +6,12 @@ jobs:
   Build:
     runs-on: all
     steps:
-      - run: echo "🎉 The . job was automatically triggered by a ${{ gitea.event_name }} event."
-      - run: echo "🐧 This job is now running on a ${{ runner.os }} server hosted by Gitea!"
-      - run: echo "🔎 The name of your branch is ${{ gitea.ref }} and your repository is ${{ gitea.repository }}."
       - name: Check out repository code
         uses: actions/checkout@v4
-      - run: echo "💡 The ${{ gitea.repository }} repository has been cloned to the runner."
-      - run: echo "💡 The ${{ gitea.sha }} repository has been cloned to the runner."
-      - run: echo "🖥️ The workflow is now ready to test your code on the runner."
-      - run: pwd
       - name: Declare variables
         run: |
           echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
           echo "run_name=$(echo "$GITHUB_REPOSITORY" | sed "s/\//_/")" >> "$GITHUB_ENV"
-      - name: show env
-        run: export
       - name: Build docker
         run: |
           docker build -t ${{ gitea.repository }}:${{ env.sha_short }} -t ${{ gitea.repository }}:latest .
