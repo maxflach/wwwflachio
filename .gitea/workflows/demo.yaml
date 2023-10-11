@@ -1,9 +1,9 @@
-name: Gitea Actions Demo
+name: ci/cd
 run-name: ${{ gitea.actor }} is testing out Gitea Actions 🚀
 on: [push]
 
 jobs:
-  Explore-Gitea-Actions:
+  Build:
     runs-on: default
     steps:
       - run: echo "🎉 The . job was automatically triggered by a ${{ gitea.event_name }} event."
