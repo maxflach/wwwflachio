@@ -26,6 +26,7 @@ jobs:
           docker build -t ${{ gitea.repository }}:${{ env.sha_short }} -t ${{ gitea.repository }}:latest .
       - name: Start docker
         run: |
+          docker container rm -f ${{ env.run_name }} || true
           docker run -d --network=web --restart unless-stopped --name ${{ env.run_name }} ${{ gitea.repository }}:${{ env.sha_short }}
       - run: echo "🍏 This job's status is ${{ job.status }}."
 
