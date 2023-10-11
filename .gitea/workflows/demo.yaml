@@ -17,9 +17,9 @@ jobs:
       - run: pwd
       - name: show env
         run: export
-        #      - name: Build docker
-        #run: |
-        #docker build -t 
+      - name: Build docker
+        run: |
+          docker build -t ${{ gitea.repository }}:${{ gitea.sha }} -t ${{ gitea.repository }}:latest
       - name: List files in the repository
         run: |
           ls ${{ gitea.workspace }}
