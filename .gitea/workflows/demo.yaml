@@ -17,9 +17,11 @@ jobs:
       - run: pwd
       - name: show env
         run: export
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
       - name: Build docker
         run: |
-          docker build -t ${{ gitea.repository }}:${{ gitea.sha }} -t ${{ gitea.repository }}:latest
+          docker build -t ${{ gitea.repository }}:${{ gitea.sha }} -t ${{ gitea.repository }}:latest .
       - name: List files in the repository
         run: |
           ls ${{ gitea.workspace }}
