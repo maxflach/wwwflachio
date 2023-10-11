@@ -20,7 +20,7 @@ jobs:
           echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - name: Show env extra
         run: |
-          echo "Sha ${{ env.sha_short }}
+          echo "Sha ${{ env.sha_short }}"
       - name: show env
         run: export
       - name: Build docker
