@@ -12,6 +12,8 @@ jobs:
         run: |
           echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
           echo "run_name=$(echo "$GITHUB_REPOSITORY" | sed "s/\//_/")" >> "$GITHUB_ENV"
+          echo "domain_name="www.flach.io"" >> "$GITHUB_ENV"
+          echo "docker_port="80"" >> "$GITHUB_ENV"
       - name: Build docker
         run: |
           docker build -t ${{ gitea.repository }}:${{ env.sha_short }} -t ${{ gitea.repository }}:latest .
@@ -19,7 +21,7 @@ jobs:
         run: |
           docker container rm -f ${{ env.run_name }} || true
           docker run -d --network=web --restart unless-stopped --name ${{ env.run_name }} ${{ gitea.repository }}:${{ env.sha_short }}
-          /usr/local/bin/caddycontrol -host www.flach.io -dial ${{ env.run_name }}:80 
+          /usr/local/bin/caddycontrol -host ${{ env.domain_name }} -dial ${{ env.run_name }}:${{ env.docker_port }}
 
 
 
