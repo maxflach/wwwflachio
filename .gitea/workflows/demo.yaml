@@ -19,7 +19,7 @@ jobs:
         run: |
           docker container rm -f ${{ env.run_name }} || true
           docker run -d --network=web --restart unless-stopped --name ${{ env.run_name }} ${{ gitea.repository }}:${{ env.sha_short }}
-          /usr/local/bin/caddycontrol -host www.flach.io -dial ${{ env.run_name }}:80 &
+          /usr/local/bin/caddycontrol -host www.flach.io -dial ${{ env.run_name }}:80 
 
 
       - run: echo "🍏 This job's status is ${{ job.status }}."
