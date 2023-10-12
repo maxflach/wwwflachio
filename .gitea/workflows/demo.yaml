@@ -22,6 +22,5 @@ jobs:
           /usr/local/bin/caddycontrol -host www.flach.io -dial ${{ env.run_name }}:80 
 
 
-      - run: echo "🍏 This job's status is ${{ job.status }}."
 
 
