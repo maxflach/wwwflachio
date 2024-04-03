@@ -21,7 +21,7 @@ jobs:
         run: |
           docker container rm -f ${{ env.run_name }} || true
           docker run -d --network=web --restart unless-stopped --name ${{ env.run_name }} ${{ gitea.repository }}:${{ env.sha_short }}
-          /usr/local/bin/caddycontrol -host ${{ env.domain_name }} -dial ${{ env.run_name }}:${{ env.docker_port }}
+          /usr/bin/caddyconf --add --url ${{ env.domain_name }} --name ${{ env.run_name }} --port ${{ env.docker_port }}
 
 
 
