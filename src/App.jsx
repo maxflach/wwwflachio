@@ -14,8 +14,8 @@ function App() {
   });
 
   return (
-    <div className=" min-h-screen bg-slate-900 text-slate-600 text-[8px] md:text-xl lg:text-2xl flex justify-center items-center">
-      <pre ref={asciiTextRef}></pre>
+    <div className=" min-h-screen bg-slate-900 text-slate-400/80 text-[8px] md:text-xl lg:text-2xl flex justify-center items-center bg-[url('/bg.png')] bg-cover">
+      <pre className="blur-sm" ref={asciiTextRef}></pre>
     </div>
   );
 }
