@@ -7,7 +7,7 @@ jobs:
     runs-on: all
     steps:
       - name: Check out repository code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
       - name: Declare variables
         run: |
           echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
@@ -22,7 +22,3 @@ jobs:
           docker container rm -f ${{ env.run_name }} || true
           docker run -d --network=web --restart unless-stopped --name ${{ env.run_name }} ${{ gitea.repository }}:${{ env.sha_short }}
           /usr/bin/caddyconf --add --url ${{ env.domain_name }} --name ${{ env.run_name }} --port ${{ env.docker_port }}
-
-
-
-
