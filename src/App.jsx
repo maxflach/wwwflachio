@@ -14,7 +14,7 @@ function App() {
   });
 
   return (
-    <div className=" min-h-screen bg-slate-900 text-slate-600 text-2xl flex justify-center items-center">
+    <div className=" min-h-screen bg-slate-900 text-slate-600 text-[8px] md:text-xl lg:text-2xl flex justify-center items-center">
       <pre ref={asciiTextRef}></pre>
     </div>
   );
