@@ -1,3 +1,120 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ===== CRT monitor framing — wraps the entire page ===== */
+.crt-bezel {
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 30% 10%, #D8C18A 0%, #B59866 50%, #8A7240 100%);
+  font-family: 'Press Start 2P', monospace;
+  overflow: hidden;
+}
+
+/* Subtle vertical plastic grain on the bezel */
+.crt-bezel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.04) 0 1px,
+    transparent 1px 4px
+  );
+  pointer-events: none;
+}
+
+/* The actual screen — everything in the page lives inside this rounded box */
+.crt-screen-area {
+  position: absolute;
+  top: clamp(20px, 5vh, 70px);
+  bottom: clamp(40px, 9vh, 110px);
+  left: clamp(20px, 4vw, 70px);
+  right: clamp(20px, 4vw, 70px);
+  border-radius: clamp(18px, 3vw, 44px);
+  overflow: hidden;
+  background: #001a10;
+  box-shadow:
+    inset 0 0 0 4px #6B5C3D,
+    inset 0 0 120px rgba(0, 0, 0, 0.8),
+    0 14px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* CRT vignette — darken the corners of the screen */
+.crt-screen-area::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+  pointer-events: none;
+  z-index: 40;
+}
+
+/* CRT host fills the screen area; Pixi mounts its WebGL canvas inside */
+.crt-host {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+}
+.crt-host canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  image-rendering: pixelated;
+}
+
+/* Bezel chrome */
+.crt-brand {
+  position: absolute;
+  bottom: clamp(12px, 3vh, 36px);
+  right: clamp(20px, 3.5vw, 60px);
+  color: #5A4A2C;
+  letter-spacing: 0.25em;
+  font-size: clamp(8px, 1vw, 12px);
+  text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.crt-power {
+  position: absolute;
+  bottom: clamp(16px, 3.4vh, 42px);
+  left: clamp(20px, 4vw, 60px);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #30FF60;
+  box-shadow: 0 0 8px #30FF60, 0 0 2px #FFFFFF inset;
+}
+
+.crt-power-label {
+  position: absolute;
+  bottom: clamp(8px, 2.2vh, 28px);
+  left: clamp(14px, 3vw, 50px);
+  font-size: clamp(6px, 0.7vw, 9px);
+  color: #5A4A2C;
+  letter-spacing: 0.15em;
+}
+
+/* ===== Dark scrollbar (used inside the terminal) ===== */
+.terminal-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.terminal-scroll::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+.terminal-scroll::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+.terminal-scroll::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+.terminal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #334155 transparent;
+}

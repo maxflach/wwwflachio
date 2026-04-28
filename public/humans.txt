@@ -1,0 +1,30 @@
+/* TEAM */
+  Name:     Max Flach
+  Role:     Serial tech founder, Founder/CTO/Entrepreneur
+  Based:    Stockholm, Sweden
+  Contact:  max@flach.io
+  LinkedIn: linkedin.com/in/max-flach-67527618
+  Site:     https://flach.io
+
+/* NOW */
+  Servo.music         — Founder + CTO   (2024 — )
+  MusicDataLabs       — Founder         (2024 — )
+  Max Flach Holding   — Founder         (2018 — )
+
+/* THEN */
+  Utopia Music        — CTO / Chief Architect / CTO  (Sep 2018 — Apr 2024)
+  Hubory              — Founder + CTO   (Sep 2015 — Nov 2021)  fiber
+  The Digital Family  — Founder         (Jun 2015 — Nov 2021)  digital incubator
+  ISPY Group          — Founder + CTO   (Jan 2002 — Sep 2018)  Stockholm digital agency
+  Qulit               — Founder + CTO   (Dec 1998 — May 2003)
+
+/* SITE */
+  Components: React, Vite, Tailwind, react-ascii-text
+  Hosted:     Firebase Hosting
+
+/* EASTER EGGS */
+  - Run, jump, find the floppy disks
+  - Press '/' for a shell, then `cd projects/` and `ls`
+  - Walk to the CRT, press ↓
+  - View-source has a note for you
+  - Open DevTools for a console banner

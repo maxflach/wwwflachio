@@ -1,23 +1,28 @@
-import { useAsciiText, deltaCorpsPriest1 as font } from "react-ascii-text";
+import { useEffect, useState } from "react";
+import Home from "./Home";
+import NotFound from "./NotFound";
+import { printDevtoolsBanner } from "./devtools";
+
+function currentPath() {
+  if (typeof window === "undefined") return "/";
+  return window.location.pathname;
+}
 
 function App() {
-  const asciiTextRef = useAsciiText({
-    animationCharacters: "▒░█",
-    animationCharacterSpacing: 1,
-    animationDelay: 2000,
-    animationDirection: "up",
-    animationInterval: 100,
-    animationLoop: true,
-    animationSpeed: 30,
-    font: font,
-    text: ["NOTHING", "TO", "SEE", "HERE"],
-  });
+  const [path, setPath] = useState(currentPath());
 
-  return (
-    <div className=" min-h-screen bg-slate-900 text-slate-400/80 text-[8px] md:text-xl lg:text-2xl flex justify-center items-center bg-[url('/bg.png')] bg-cover">
-      <pre className="blur-sm" ref={asciiTextRef}></pre>
-    </div>
-  );
+  useEffect(() => {
+    printDevtoolsBanner();
+  }, []);
+
+  useEffect(() => {
+    function onPop() { setPath(currentPath()); }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  if (path === "/" || path === "") return <Home />;
+  return <NotFound />;
 }
 
 export default App;
