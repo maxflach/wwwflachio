@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Application, Sprite, Texture } from "pixi.js";
 import { CRTFilter, RGBSplitFilter } from "pixi-filters";
+import * as THREE from "three";
 import Terminal from "./Terminal";
+import { buildComputerScene, setKeyState } from "./computerModel";
+
+// Pixi internal render-target dimensions. Higher than the game canvas so the CRT
+// filter scanlines/noise stay crisp when sampled as a texture in 3D.
+const PIXI_W = 960;
+const PIXI_H = 540;
 
 // Render resolution. The canvas is upscaled with image-rendering: pixelated.
 const VIEW_W = 480;
@@ -174,7 +181,9 @@ export default function Home() {
     c.height = VIEW_H;
     canvasRef.current = c;
   }
-  const pixiHostRef = useRef(null);
+  const threeHostRef = useRef(null);
+  const pixiCanvasRef = useRef(null);
+  const sceneRef = useRef(null);
   const filtersRef = useRef({ crt: null, rgb: null });
 
   const stateRef = useRef({
@@ -333,38 +342,48 @@ export default function Home() {
     return () => clearTimeout(id);
   }, [reveal]);
 
-  // Pixi: mount a WebGL canvas that uses the off-DOM game canvas as a texture and
-  // pipes it through CRT + RGB-split filters before display.
+  // Render pipeline:
+  //   2D game canvas (off-DOM)                 ← drawn by the game loop
+  //     → Pixi WebGL canvas (off-DOM)          ← CRT + RGB-split filters applied
+  //       → Three.js (CanvasTexture on the screen mesh inside the 3D 486 model)
+  //         → renders to the visible canvas mounted in `threeHostRef`
   useEffect(() => {
     let cancelled = false;
     let app = null;
     let texture = null;
+    let renderer = null;
+    let raf = 0;
+    let onResize = null;
+    let onMouseMove = null;
+    let mouseX = 0, mouseY = 0;
 
     (async () => {
+      // ----- Pixi (off-DOM, fixed resolution) -----
       app = new Application();
       try {
         await app.init({
-          resizeTo: pixiHostRef.current,
+          width: PIXI_W,
+          height: PIXI_H,
           backgroundAlpha: 0,
           antialias: false,
-          autoDensity: true,
-          resolution: window.devicePixelRatio || 1,
+          autoDensity: false,
+          resolution: 1,
+          preserveDrawingBuffer: true, // so Three can sample the canvas
         });
       } catch (err) {
         console.error("pixi init failed", err);
         return;
       }
-      if (cancelled || !pixiHostRef.current) {
+      if (cancelled || !threeHostRef.current) {
         try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch {}
         return;
       }
-
-      pixiHostRef.current.appendChild(app.canvas);
+      pixiCanvasRef.current = app.canvas; // do NOT append to DOM
 
       texture = Texture.from(canvasRef.current);
       const sprite = new Sprite(texture);
-      sprite.width = app.screen.width;
-      sprite.height = app.screen.height;
+      sprite.width = PIXI_W;
+      sprite.height = PIXI_H;
       app.stage.addChild(sprite);
 
       const crt = new CRTFilter({
@@ -380,34 +399,127 @@ export default function Home() {
         seed: 0,
         time: 0,
       });
-      const rgb = new RGBSplitFilter([2, 0], [0, 0], [-2, 0]);
-
+      const rgb = new RGBSplitFilter({ red: [2, 0], green: [0, 0], blue: [-2, 0] });
       sprite.filters = [crt, rgb];
       filtersRef.current.crt = crt;
       filtersRef.current.rgb = rgb;
 
       app.ticker.add((ticker) => {
         const dt = ticker.deltaTime;
-        // Push the latest 2D-canvas frame to the GPU
         texture.source.update();
         crt.time += dt * 0.05;
         crt.seed = Math.random();
       });
 
-      const onResize = () => {
-        sprite.width = app.screen.width;
-        sprite.height = app.screen.height;
+      // ----- Three.js scene -----
+      const host = threeHostRef.current;
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0a0805);
+
+      const camera = new THREE.PerspectiveCamera(
+        36,
+        host.clientWidth / Math.max(1, host.clientHeight),
+        0.1,
+        100
+      );
+      // Pulled back + raised so the keyboard lands in the lower third of the frame.
+      const camBase = new THREE.Vector3(0, 5.4, 9.4);
+      const camTarget = new THREE.Vector3(0, 0.6, 1.1);
+      camera.position.copy(camBase);
+      camera.lookAt(camTarget);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.setSize(host.clientWidth, host.clientHeight);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      host.appendChild(renderer.domElement);
+
+      const built = buildComputerScene(pixiCanvasRef.current);
+      scene.add(built.object3D);
+      sceneRef.current = built;
+
+      onMouseMove = (e) => {
+        mouseX = (e.clientX / window.innerWidth) * 2 - 1;
+        mouseY = (e.clientY / window.innerHeight) * 2 - 1;
       };
-      app.renderer.on("resize", onResize);
+      window.addEventListener("pointermove", onMouseMove);
+
+      onResize = () => {
+        if (!host) return;
+        const w = host.clientWidth, h = Math.max(1, host.clientHeight);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+      };
+      window.addEventListener("resize", onResize);
+
+      let last = performance.now();
+      const loop = (now) => {
+        const dt = (now - last) / 1000;
+        last = now;
+
+        // Mouse parallax — small camera drift around the base position
+        camera.position.x = camBase.x + mouseX * 0.45;
+        camera.position.y = camBase.y + (-mouseY) * 0.25;
+        camera.lookAt(camTarget);
+
+        if (sceneRef.current) sceneRef.current.update(dt);
+        renderer.render(scene, camera);
+        raf = requestAnimationFrame(loop);
+      };
+      raf = requestAnimationFrame(loop);
     })();
 
     return () => {
       cancelled = true;
+      cancelAnimationFrame(raf);
+      if (onResize) window.removeEventListener("resize", onResize);
+      if (onMouseMove) window.removeEventListener("pointermove", onMouseMove);
       filtersRef.current.crt = null;
       filtersRef.current.rgb = null;
+      const built = sceneRef.current;
+      sceneRef.current = null;
+      if (built) {
+        built.object3D.traverse((obj) => {
+          if (obj.geometry) obj.geometry.dispose();
+          if (obj.material) {
+            const ms = Array.isArray(obj.material) ? obj.material : [obj.material];
+            for (const m of ms) {
+              if (m.map) m.map.dispose?.();
+              m.dispose?.();
+            }
+          }
+        });
+        if (built.screenTexture) built.screenTexture.dispose();
+      }
+      if (renderer) {
+        renderer.dispose();
+        if (renderer.domElement.parentNode) {
+          renderer.domElement.parentNode.removeChild(renderer.domElement);
+        }
+      }
       if (app) {
         try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch {}
       }
+      pixiCanvasRef.current = null;
+    };
+  }, []);
+
+  // Animate the matching 3D keycap on real keyboard activity.
+  useEffect(() => {
+    function down(e) {
+      const built = sceneRef.current;
+      if (built) setKeyState(built.keyMap, e.code, true);
+    }
+    function up(e) {
+      const built = sceneRef.current;
+      if (built) setKeyState(built.keyMap, e.code, false);
+    }
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
     };
   }, []);
 
@@ -500,73 +612,50 @@ export default function Home() {
   }
 
   return (
-    <div className="crt-bezel">
-      <div
-        className="crt-screen-area"
-        style={{ fontFamily: "'Press Start 2P', monospace" }}
-      >
-        {/* Big silkscreen sign — sits behind the canvas */}
-        <div className="absolute inset-0 z-0 flex items-center justify-center pointer-events-none select-none">
-          <div
-            className="text-center leading-tight"
-            style={{
-              color: "#0A4D2E",
-              fontSize: "min(11vw, 11vh)",
-              letterSpacing: "0.05em",
-              opacity: 0.85,
-            }}
-          >
-            NOTHING<br />TO SEE<br />HERE
-          </div>
+    <div
+      className="fixed inset-0 overflow-hidden bg-[#0a0805]"
+      style={{ fontFamily: "'Press Start 2P', monospace" }}
+    >
+      {/* Three.js canvas mounts here — renders the 3D 486 with the live screen */}
+      <div ref={threeHostRef} className="absolute inset-0" />
+
+      <Hud foundCount={foundCount} total={FLOPPIES_DATA.length} />
+
+      {crtNear && !terminalOpen && (
+        <div
+          className="absolute z-20 left-1/2 -translate-x-1/2 text-[#FFD030] text-[10px] md:text-xs animate-bounce"
+          style={{ bottom: "10%", textShadow: "2px 2px 0 #000" }}
+        >
+          ↓ TO BOOT
         </div>
+      )}
 
-        {/* Pixi WebGL canvas mounts here — applies CRT, scanlines, RGB split, noise */}
-        <div ref={pixiHostRef} className="crt-host" />
+      {reveal && (
+        <div
+          className="absolute z-30 top-[28%] left-1/2 -translate-x-1/2 bg-[#F5F5DC] text-[#181818] px-5 py-3 text-center"
+          style={{
+            border: "4px solid #181818",
+            boxShadow: "6px 6px 0 #181818",
+            fontFamily: "'Press Start 2P', monospace",
+          }}
+        >
+          <div className="text-[8px] text-[#888] mb-2 tracking-wider">▸ {reveal.label}</div>
+          <pre className="text-[9px] md:text-[11px] whitespace-pre leading-relaxed" style={{ fontFamily: "'Press Start 2P', monospace" }}>
+            {reveal.text}
+          </pre>
+        </div>
+      )}
 
+      {foundCount === FLOPPIES_DATA.length && (
+        <div
+          className="absolute z-20 bottom-3 left-1/2 -translate-x-1/2 text-[#FFD030] text-[10px] md:text-xs"
+          style={{ textShadow: "2px 2px 0 #000" }}
+        >
+          ★ ALL DISKS RECOVERED ★
+        </div>
+      )}
 
-        <Hud foundCount={foundCount} total={FLOPPIES_DATA.length} />
-
-        {crtNear && !terminalOpen && (
-          <div
-            className="absolute z-20 left-1/2 -translate-x-1/2 text-[#FFD030] text-[10px] md:text-xs animate-bounce"
-            style={{ bottom: "22%", textShadow: "2px 2px 0 #000" }}
-          >
-            ↓ TO BOOT
-          </div>
-        )}
-
-        {reveal && (
-          <div
-            className="absolute z-30 top-[28%] left-1/2 -translate-x-1/2 bg-[#F5F5DC] text-[#181818] px-5 py-3 text-center"
-            style={{
-              border: "4px solid #181818",
-              boxShadow: "6px 6px 0 #181818",
-              fontFamily: "'Press Start 2P', monospace",
-            }}
-          >
-            <div className="text-[8px] text-[#888] mb-2 tracking-wider">▸ {reveal.label}</div>
-            <pre className="text-[9px] md:text-[11px] whitespace-pre leading-relaxed" style={{ fontFamily: "'Press Start 2P', monospace" }}>
-              {reveal.text}
-            </pre>
-          </div>
-        )}
-
-        {foundCount === FLOPPIES_DATA.length && (
-          <div
-            className="absolute z-20 bottom-3 left-1/2 -translate-x-1/2 text-[#FFD030] text-[10px] md:text-xs"
-            style={{ textShadow: "2px 2px 0 #000" }}
-          >
-            ★ ALL DISKS RECOVERED ★
-          </div>
-        )}
-
-        {terminalOpen && <Terminal onClose={() => setTerminalOpen(false)} />}
-      </div>
-
-      {/* Bezel chrome */}
-      <div className="crt-power" />
-      <span className="crt-power-label">PWR</span>
-      <div className="crt-brand">FLACH-IO</div>
+      {terminalOpen && <Terminal onClose={() => setTerminalOpen(false)} />}
     </div>
   );
 }
