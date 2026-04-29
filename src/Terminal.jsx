@@ -3,10 +3,27 @@ import { useEffect, useRef, useState } from "react";
 // ===== Virtual filesystem =====
 const ABOUT = [
   "max flach",
-  "serial tech founder, based in stockholm.",
-  "shipping code professionally since 1996 — three decades and counting.",
-  "currently building servo.music + musicdatalabs.",
-  "previously: cto @ utopia music. founder @ hubory (fiber).",
+  "founder / cto / entrepreneur — stockholm, sweden",
+  "shipping code professionally since 1996.",
+  "three decades, six companies, and counting.",
+  "",
+  "[ now ]",
+  "  servo.music         founder + cto    (2024 — )",
+  "  musicdatalabs       founder          (2024 — )",
+  "  max flach holding   founder          (2018 — )",
+  "",
+  "[ then ]",
+  "  utopia music        cto / chief architect / cto   (2018 — 2024)",
+  "  hubory              founder + cto    (2015 — 2021)   fiber",
+  "  the digital family  founder          (2015 — 2021)   incubator",
+  "  ispy group          founder + cto    (2002 — 2018)   digital agency",
+  "  qulit               founder + cto    (1998 — 2003)",
+  "",
+  "[ contact ]",
+  "  email     max@flach.io",
+  "  linkedin  linkedin.com/in/max-flach-67527618",
+  "",
+  "type 'help' for the rest.",
 ].join("\n");
 
 const CONTACT = [
