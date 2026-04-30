@@ -6,6 +6,7 @@ import { VIEW_W, VIEW_H } from "../game/world";
 export const MENU_ITEMS = [
   { id: "game", label: "STORY" },
   { id: "terminal", label: "TERMINAL" },
+  { id: "lock", label: "LOCK SCREEN" },
   { id: "reboot", label: "REBOOT" },
 ];
 

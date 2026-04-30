@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Application, Sprite, Texture } from "pixi.js";
 import { CRTFilter, RGBSplitFilter } from "pixi-filters";
 import * as THREE from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 
 import { buildComputerScene, setKeyState } from "./computerModel";
 import { run as runTerminal, makePrompt, complete as completeTerminal } from "./terminalCore";
@@ -21,6 +22,10 @@ import {
 import { BOOT_LINES, BOOT_LINE_MS, BOOT_HOLD_MS, drawBoot } from "./screens/boot";
 import { MENU_ITEMS, drawMenu } from "./screens/menu";
 import { drawTerminal } from "./screens/terminal";
+import { drawScreensaver, updateScreensaver } from "./screens/screensaver";
+
+// Switch to screensaver after this much idle time (no key activity)
+const IDLE_TIMEOUT_MS = 30000;
 
 const IS_TOUCH = typeof window !== "undefined" &&
   ("ontouchstart" in window || (navigator?.maxTouchPoints || 0) > 0);
@@ -51,7 +56,9 @@ export default function Home() {
     crtNear: false,
     cameraX: 0,
     t: 0,
-    mode: "boot",                                        // "boot" | "menu" | "game" | "terminal"
+    mode: "boot",                              // "boot" | "menu" | "game" | "terminal" | "screensaver"
+    savedMode: "menu",                         // mode to return to from screensaver
+    lastActivity: performance.now(),
     boot: { elapsed: 0, lineIndex: 0, postPause: 0 },
     menu: { selected: 0 },
     terminal: {
@@ -126,6 +133,14 @@ export default function Home() {
       // here to avoid double-processing.
       if (IS_TOUCH && e.target === terminalBridgeRef.current) return;
       const k = e.key;
+      s.lastActivity = performance.now();
+
+      // ----- Screensaver: any key returns to the saved mode -----
+      if (s.mode === "screensaver") {
+        e.preventDefault();
+        switchMode(s.savedMode || "menu");
+        return;
+      }
 
       // ----- Boot screen: any key skips ahead to the menu -----
       if (s.mode === "boot") {
@@ -152,6 +167,11 @@ export default function Home() {
           const item = MENU_ITEMS[s.menu.selected];
           if (item.id === "game") switchMode("game");
           else if (item.id === "terminal") switchMode("terminal");
+          else if (item.id === "lock") {
+            // Jump straight to the screensaver; any key returns here.
+            s.savedMode = "menu";
+            switchMode("screensaver");
+          }
           else if (item.id === "reboot") switchMode("boot");
         }
         return;
@@ -313,6 +333,7 @@ export default function Home() {
     }
     if (s.mode === "menu") return;
     if (s.mode === "terminal") return;
+    if (s.mode === "screensaver") { updateScreensaver(s, dt); return; }
 
     // ----- Game mode physics -----
     const p = s.player;
@@ -401,9 +422,10 @@ export default function Home() {
   function draw(ctx) {
     const s = stateRef.current;
 
-    if (s.mode === "boot")     { drawBoot(ctx, s); return; }
-    if (s.mode === "menu")     { drawMenu(ctx, s); return; }
-    if (s.mode === "terminal") { drawTerminal(ctx, s); return; }
+    if (s.mode === "boot")        { drawBoot(ctx, s); return; }
+    if (s.mode === "menu")        { drawMenu(ctx, s); return; }
+    if (s.mode === "terminal")    { drawTerminal(ctx, s); return; }
+    if (s.mode === "screensaver") { drawScreensaver(ctx, s); return; }
 
     const cam = Math.round(s.cameraX);
 
@@ -569,7 +591,19 @@ export default function Home() {
       renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
       renderer.setSize(host.clientWidth, host.clientHeight);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
+      // Tone-mapping pulls bright highlights into a perceptual range so the
+      // plastic doesn't blow out white.
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 0.78;
       host.appendChild(renderer.domElement);
+
+      // Procedural environment map — without this the clearcoat layer on the
+      // plastic materials has nothing to reflect, so the plastic looks flat.
+      // Kept low so the case isn't internally illuminated.
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      const envScene = new RoomEnvironment();
+      scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+      scene.environmentIntensity = 0.28;
 
       const built = buildComputerScene(pixiCanvasRef.current);
       scene.add(built.object3D);
@@ -677,6 +711,33 @@ export default function Home() {
         try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch { }
       }
       pixiCanvasRef.current = null;
+    };
+  }, []);
+
+  // ---- Idle watcher: after IDLE_TIMEOUT_MS of no input, kick over to
+  //      the screensaver. Excludes boot mode (still scrolling). Any input
+  //      in screensaver mode pops back to the saved mode (handled in input). ----
+  useEffect(() => {
+    const id = setInterval(() => {
+      const s = stateRef.current;
+      if (s.mode === "screensaver" || s.mode === "boot") return;
+      if (performance.now() - s.lastActivity > IDLE_TIMEOUT_MS) {
+        s.savedMode = s.mode;
+        switchMode("screensaver");
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Mouse / pointer activity also resets idle (so just moving the mouse
+  // counts as "alive" — important since the page has no scrollable content).
+  useEffect(() => {
+    const bump = () => { stateRef.current.lastActivity = performance.now(); };
+    window.addEventListener("pointermove", bump);
+    window.addEventListener("pointerdown", bump);
+    return () => {
+      window.removeEventListener("pointermove", bump);
+      window.removeEventListener("pointerdown", bump);
     };
   }, []);
 

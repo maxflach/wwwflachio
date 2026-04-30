@@ -77,8 +77,22 @@ function hexToRgb(hex) {
   ];
 }
 
+// Take a canvas and return a same-sized canvas that has been Gaussian-blurred
+// using ctx.filter. Used to soften per-pixel noise into smoother plastic-feel
+// gradients rather than concrete-feel pebble grain.
+function blurCanvas(src, blurPx) {
+  const dst = document.createElement("canvas");
+  dst.width = src.width;
+  dst.height = src.height;
+  const ctx = dst.getContext("2d");
+  ctx.filter = `blur(${blurPx}px)`;
+  ctx.drawImage(src, 0, 0);
+  return dst;
+}
+
 // Aged-plastic texture: base color + per-pixel speckle + a few low-frequency blotches.
-function makePlasticTexture(baseHex, repeat = 2, blotches = 50, speckleAmp = 22) {
+// `blurPx` smooths the per-pixel noise into wavy plastic-feel gradients.
+function makePlasticTexture(baseHex, repeat = 2, blotches = 50, speckleAmp = 22, blurPx = 3) {
   const size = 256;
   const c = document.createElement("canvas");
   c.width = c.height = size;
@@ -88,7 +102,7 @@ function makePlasticTexture(baseHex, repeat = 2, blotches = 50, speckleAmp = 22)
   ctx.fillStyle = `rgb(${br},${bg},${bb})`;
   ctx.fillRect(0, 0, size, size);
 
-  // Per-pixel speckle
+  // Per-pixel speckle (will mostly get blurred into smooth gradients)
   const img = ctx.getImageData(0, 0, size, size);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -114,7 +128,8 @@ function makePlasticTexture(baseHex, repeat = 2, blotches = 50, speckleAmp = 22)
     ctx.fill();
   }
 
-  const tex = new THREE.CanvasTexture(c);
+  const final = blurPx > 0 ? blurCanvas(c, blurPx) : c;
+  const tex = new THREE.CanvasTexture(final);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -193,7 +208,8 @@ function makePlasticBumpMap() {
     ctx.fill();
   }
 
-  const tex = new THREE.CanvasTexture(c);
+  const final = blurCanvas(c, 1.5); // soften pebble grain into plastic micro-relief
+  const tex = new THREE.CanvasTexture(final);
   tex.colorSpace = THREE.NoColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -235,7 +251,8 @@ function makeRoughnessMap() {
     ctx.fill();
   }
 
-  const tex = new THREE.CanvasTexture(c);
+  const final = blurCanvas(c, 2); // smoother roughness variation
+  const tex = new THREE.CanvasTexture(final);
   tex.colorSpace = THREE.NoColorSpace;
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -365,14 +382,15 @@ let TEXTURES = null;
 function getTextures() {
   if (TEXTURES) return TEXTURES;
   TEXTURES = {
-    // repeat=1 because the meshes apply world-projected UVs (setBoxUVsByNormal)
-    // which already encode tile density per world unit. The texture then tiles
-    // identically across every face regardless of face aspect ratio.
-    body:       makePlasticTexture(PALETTE.body, 1, 60, 22),
-    bodyShadow: makePlasticTexture(PALETTE.bodyShadow, 1, 70, 24),
-    bodyDeep:   makePlasticTexture(PALETTE.bodyDeep, 1, 70, 26),
-    keyTop:     makePlasticTexture(PALETTE.keyTop, 1, 18, 14),
-    speaker:    makePlasticTexture(PALETTE.darkSoft, 1, 90, 30),
+    // Plastic albedo should be nearly uniform — real plastic gets its look from
+    // SPECULAR / clearcoat reflections off a roomEnvironment, not from baked-in
+    // blots and noise in the diffuse map. Way fewer blotches, much lower
+    // speckle, heavier blur — a near-flat color with subtle wavy variation.
+    body:       makePlasticTexture(PALETTE.body, 1, 14, 8, 5),
+    bodyShadow: makePlasticTexture(PALETTE.bodyShadow, 1, 14, 8, 5),
+    bodyDeep:   makePlasticTexture(PALETTE.bodyDeep, 1, 14, 8, 5),
+    keyTop:     makePlasticTexture(PALETTE.keyTop, 1, 8, 5, 4),
+    speaker:    makePlasticTexture(PALETTE.darkSoft, 1, 18, 10, 4),
     wood:       makeWoodTexture(),
     grille:     makeGrilleTexture(),
     bump:       makePlasticBumpMap(),
@@ -386,9 +404,10 @@ function getTextures() {
 }
 
 // ===== Helpers =====
-// Plastic body material — diffuse + bump for micro-grain + roughness variation +
-// thin clearcoat layer for that polished-plastic sheen.
-function makePlasticMaterial({ map, roughness = 0.62, clearcoat = 0.28, clearcoatRoughness = 0.55, bumpScale = 0.0035 }) {
+// Plastic body material. The clearcoat layer reflects scene.environment —
+// kept SUBTLE so the case doesn't look internally lit. envMapIntensity 0.4
+// scales reflection strength per material.
+function makePlasticMaterial({ map, roughness = 0.6, clearcoat = 0.25, clearcoatRoughness = 0.45, bumpScale = 0.0015, envMapIntensity = 0.4 }) {
   const tex = getTextures();
   return new THREE.MeshPhysicalMaterial({
     map,
@@ -399,29 +418,119 @@ function makePlasticMaterial({ map, roughness = 0.62, clearcoat = 0.28, clearcoa
     clearcoat,
     clearcoatRoughness,
     metalness: 0.0,
+    envMapIntensity,
   });
 }
 
 let sharedKeyMaterial = null;
 function getKeyMaterial() {
   if (!sharedKeyMaterial) {
-    // Keys are matte plastic — heavier roughness, very thin clearcoat
     sharedKeyMaterial = makePlasticMaterial({
       map: getTextures().keyTop,
-      roughness: 0.7,
-      clearcoat: 0.08,
-      clearcoatRoughness: 0.7,
-      bumpScale: 0.0025,
+      roughness: 0.65,
+      clearcoat: 0.15,
+      clearcoatRoughness: 0.55,
+      bumpScale: 0.0012,
+      envMapIntensity: 0.35,
     });
   }
   return sharedKeyMaterial;
 }
 
-function makeKey(widthU = 1, heightU = 1) {
+// Display label for each key code. Empty string = no label (Space).
+const KEY_LABELS = {
+  Escape: "Esc",
+  F1: "F1", F2: "F2", F3: "F3", F4: "F4",
+  F5: "F5", F6: "F6", F7: "F7", F8: "F8",
+  F9: "F9", F10: "F10", F11: "F11", F12: "F12",
+  Backquote: "`", Digit1: "1", Digit2: "2", Digit3: "3", Digit4: "4",
+  Digit5: "5", Digit6: "6", Digit7: "7", Digit8: "8", Digit9: "9", Digit0: "0",
+  Minus: "-", Equal: "=", Backspace: "←",
+  Tab: "Tab",
+  KeyQ: "Q", KeyW: "W", KeyE: "E", KeyR: "R", KeyT: "T",
+  KeyY: "Y", KeyU: "U", KeyI: "I", KeyO: "O", KeyP: "P",
+  BracketLeft: "[", BracketRight: "]", Backslash: "\\",
+  CapsLock: "Caps",
+  KeyA: "A", KeyS: "S", KeyD: "D", KeyF: "F", KeyG: "G",
+  KeyH: "H", KeyJ: "J", KeyK: "K", KeyL: "L",
+  Semicolon: ";", Quote: "'", Enter: "↵",
+  ShiftLeft: "Shift", ShiftRight: "Shift",
+  KeyZ: "Z", KeyX: "X", KeyC: "C", KeyV: "V", KeyB: "B",
+  KeyN: "N", KeyM: "M",
+  Comma: ",", Period: ".", Slash: "/",
+  ControlLeft: "Ctrl", ControlRight: "Ctrl",
+  MetaLeft: "⌘", MetaRight: "⌘",
+  AltLeft: "Alt", AltRight: "Alt",
+  Space: "",
+  ContextMenu: "≡",
+  PrintScreen: "PrtSc", ScrollLock: "ScrLk", Pause: "Pause",
+  Insert: "Ins", Home: "Home", PageUp: "PgUp",
+  Delete: "Del", End: "End", PageDown: "PgDn",
+  ArrowUp: "↑", ArrowLeft: "←", ArrowDown: "↓", ArrowRight: "→",
+  NumLock: "Num", NumpadDivide: "/", NumpadMultiply: "*", NumpadSubtract: "-",
+  Numpad7: "7", Numpad8: "8", Numpad9: "9", NumpadAdd: "+",
+  Numpad4: "4", Numpad5: "5", Numpad6: "6",
+  Numpad1: "1", Numpad2: "2", Numpad3: "3", NumpadEnter: "↵",
+  Numpad0: "0", NumpadDecimal: ".",
+};
+
+const labelTextureCache = new Map();
+function getLabelTexture(label) {
+  if (!label) return null;
+  if (labelTextureCache.has(label)) return labelTextureCache.get(label);
+
+  const size = 64;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, size, size);
+
+  // Slightly faded ink — matches the aged-keyboard feel
+  ctx.fillStyle = "#3A2812";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  // Single-character labels get a big bold print; multi-letter shrinks to fit
+  let fontSize;
+  if (label.length === 1)      fontSize = 36;
+  else if (label.length <= 3)  fontSize = 24;
+  else if (label.length <= 5)  fontSize = 18;
+  else                          fontSize = 14;
+  ctx.font = `600 ${fontSize}px Helvetica, Arial, sans-serif`;
+  ctx.fillText(label, size / 2, size / 2);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  labelTextureCache.set(label, tex);
+  return tex;
+}
+
+function makeKey(widthU = 1, heightU = 1, code) {
   const w = widthU * STRIDE - GAP;
   const d = heightU * STRIDE - GAP;
-  // Small bevel on the keycap — softens the keys against the chunky housing
-  return new THREE.Mesh(rbox(w, KEY_HEIGHT, d, 0.012, 2), getKeyMaterial());
+  const cap = new THREE.Mesh(rbox(w, KEY_HEIGHT, d, 0.012, 2), getKeyMaterial());
+
+  // Attach a label as a child plane, so it follows the cap when pressed.
+  const labelText = code ? KEY_LABELS[code] : null;
+  if (labelText) {
+    const labelTex = getLabelTexture(labelText);
+    const plane = new THREE.PlaneGeometry(w * 0.78, d * 0.78);
+    const mat = new THREE.MeshBasicMaterial({
+      map: labelTex,
+      transparent: true,
+      opacity: 0.78,
+      depthWrite: false,
+    });
+    const labelMesh = new THREE.Mesh(plane, mat);
+    labelMesh.rotation.x = -Math.PI / 2; // lie flat on the keycap top
+    labelMesh.position.y = KEY_HEIGHT / 2 + 0.001; // hover just above
+    cap.add(labelMesh);
+  }
+
+  return cap;
 }
 
 // Sculpted IBM-Model-M-style profile: each row gets a small pitch + Y offset
@@ -450,7 +559,7 @@ function buildMainBlock(keyMap) {
         continue;
       }
       const wU = k.w || 1;
-      const mesh = makeKey(wU, 1);
+      const mesh = makeKey(wU, 1, k.code);
       const x = xCur + (wU * STRIDE - GAP) / 2;
       const y = KEY_HEIGHT / 2;
       mesh.position.set(x, y, 0);
@@ -497,7 +606,7 @@ function makeMaxLogoTexture() {
 function buildCluster(keys, keyMap) {
   const group = new THREE.Group();
   for (const [code, col, row, wU = 1, hU = 1] of keys) {
-    const mesh = makeKey(wU, hU);
+    const mesh = makeKey(wU, hU, code);
     const w = wU * STRIDE - GAP;
     const d = hU * STRIDE - GAP;
     const x = col * STRIDE + w / 2;
@@ -689,9 +798,9 @@ export function buildComputerScene(pixiCanvas) {
 
   const tex = getTextures();
   const materials = {
-    matBody:       makePlasticMaterial({ map: tex.body,       roughness: 0.62, clearcoat: 0.30, clearcoatRoughness: 0.55 }),
-    matBodyShadow: makePlasticMaterial({ map: tex.bodyShadow, roughness: 0.74, clearcoat: 0.18, clearcoatRoughness: 0.7  }),
-    matBodyDeep:   makePlasticMaterial({ map: tex.bodyDeep,   roughness: 0.78, clearcoat: 0.12, clearcoatRoughness: 0.75 }),
+    matBody:       makePlasticMaterial({ map: tex.body,       roughness: 0.55, clearcoat: 0.30, clearcoatRoughness: 0.40, envMapIntensity: 0.45 }),
+    matBodyShadow: makePlasticMaterial({ map: tex.bodyShadow, roughness: 0.62, clearcoat: 0.18, clearcoatRoughness: 0.50, envMapIntensity: 0.35 }),
+    matBodyDeep:   makePlasticMaterial({ map: tex.bodyDeep,   roughness: 0.68, clearcoat: 0.12, clearcoatRoughness: 0.60, envMapIntensity: 0.30 }),
     matDark:       new THREE.MeshStandardMaterial({ color: PALETTE.dark, roughness: 0.5 }),
   };
 
@@ -767,15 +876,17 @@ export function buildComputerScene(pixiCanvas) {
 
   const flangeMat = makePlasticMaterial({
     map: tex.bodyDeep,
-    roughness: 0.78,
+    roughness: 0.68,
     clearcoat: 0.12,
-    clearcoatRoughness: 0.75,
+    clearcoatRoughness: 0.60,
+    envMapIntensity: 0.30,
   });
   const consoleMat = makePlasticMaterial({
     map: tex.body,
-    roughness: 0.62,
+    roughness: 0.55,
     clearcoat: 0.30,
-    clearcoatRoughness: 0.55,
+    clearcoatRoughness: 0.40,
+    envMapIntensity: 0.45,
   });
 
   const flange = new THREE.Mesh(
@@ -815,8 +926,15 @@ export function buildComputerScene(pixiCanvas) {
     new THREE.MeshBasicMaterial({ map: makeMaxLogoTexture(), toneMapped: false })
   );
   maxPlate.rotation.x = -Math.PI / 2;
-  // Positioned above the F-row keys, near the left edge of the console
-  maxPlate.position.set(-mainWidth / 2 + 0.32, surfaceY + 0.001, ibmZ);
+  // Positioned above the F-row keys, near the left edge of the console.
+  // Sits well above the surface (≈2cm) so depth ties don't flicker at
+  // oblique camera angles — the rounded console corners still come close
+  // at small offsets, polygonOffset alone isn't enough.
+  maxPlate.position.set(-mainWidth / 2 + 0.32, surfaceY + 0.02, ibmZ);
+  maxPlate.material.polygonOffset = true;
+  maxPlate.material.polygonOffsetFactor = -4;
+  maxPlate.material.polygonOffsetUnits = -4;
+  maxPlate.renderOrder = 1; // draw after the console
   kb.add(maxPlate);
 
   // ----- Three lock-state LEDs above the numpad (Caps / Num / Scroll) -----
@@ -849,15 +967,17 @@ export function buildComputerScene(pixiCanvas) {
   root.add(kb);
 
   // ----- Lights -----
-  const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+  // Direct lights — softened since scene.environment now contributes the
+  // ambient + soft fill. A single warm key light keeps the shapes defined.
+  const ambient = new THREE.AmbientLight(0xffffff, 0.18);
   root.add(ambient);
-  const keyLight = new THREE.DirectionalLight(0xfff5e0, 1.1);
+  const keyLight = new THREE.DirectionalLight(0xfff5e0, 0.7);
   keyLight.position.set(3.5, 6.5, 4);
   root.add(keyLight);
-  const fill = new THREE.DirectionalLight(0xb0c8ff, 0.35);
+  const fill = new THREE.DirectionalLight(0xb0c8ff, 0.18);
   fill.position.set(-3, 2.5, 3);
   root.add(fill);
-  const rim = new THREE.DirectionalLight(0xffe0b0, 0.25);
+  const rim = new THREE.DirectionalLight(0xffe0b0, 0.15);
   rim.position.set(0, 1, -4);
   root.add(rim);
 
