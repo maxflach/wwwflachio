@@ -37,9 +37,9 @@ const BOOT_LINE_MS = 110;
 const BOOT_HOLD_MS = 900;
 
 const MENU_ITEMS = [
-  { id: "game",     label: "BOOT GAME / STORY" },
-  { id: "terminal", label: "BOOT TERMINAL" },
-  { id: "reboot",   label: "REBOOT" },
+  { id: "game", label: "STORY" },
+  { id: "terminal", label: "TERMINAL" },
+  { id: "reboot", label: "REBOOT" },
 ];
 
 // Render resolution. The canvas is upscaled with image-rendering: pixelated.
@@ -58,36 +58,36 @@ const JUMP_BUFFER_FRAMES = 6; // jump pressed shortly before landing still count
 // Each sector's silkscreen label sits above the ground at its midpoint.
 const SECTORS = [
   { label: "MEMORY", x: 120, y: 240 },
-  { label: "CPU",    x: 480, y: 240 },
-  { label: "I/O",    x: 800, y: 240 },
+  { label: "CPU", x: 480, y: 240 },
+  { label: "I/O", x: 800, y: 240 },
 ];
 
 // Solid platforms — physics treats every entry as a rectangle the player collides with.
 const SOLIDS = [
-  { x: 0,   y: 254, w: WORLD_W, h: 16, type: "pcb-ground" },
+  { x: 0, y: 254, w: WORLD_W, h: 16, type: "pcb-ground" },
 
   // MEMORY sector — climb left to right
-  { x: 60,  y: 218, w: 80,  h: 14, type: "ram" },
-  { x: 168, y: 184, w: 56,  h: 12, type: "dip-short" },
-  { x: 256, y: 144, w: 72,  h: 14, type: "ram" },
+  { x: 60, y: 218, w: 80, h: 14, type: "ram" },
+  { x: 168, y: 184, w: 56, h: 12, type: "dip-short" },
+  { x: 256, y: 144, w: 72, h: 14, type: "ram" },
 
   // CPU sector — heatsink + socket on ground level, DIP up high as a step
-  { x: 372, y: 208, w: 96,  h: 16, type: "heatsink" },
-  { x: 488, y: 214, w: 80,  h: 14, type: "cpu-socket" },
-  { x: 568, y: 168, w: 80,  h: 12, type: "dip-long" },
+  { x: 372, y: 208, w: 96, h: 16, type: "heatsink" },
+  { x: 488, y: 214, w: 80, h: 14, type: "cpu-socket" },
+  { x: 568, y: 168, w: 80, h: 12, type: "dip-long" },
 
   // I/O sector — caps low, DIP mid, small DIP higher
-  { x: 656, y: 206, w: 60,  h: 14, type: "caps" },
-  { x: 740, y: 174, w: 72,  h: 12, type: "dip-long" },
-  { x: 848, y: 200, w: 50,  h: 12, type: "dip-short" },
+  { x: 656, y: 206, w: 60, h: 14, type: "caps" },
+  { x: 740, y: 174, w: 72, h: 12, type: "dip-long" },
+  { x: 848, y: 200, w: 50, h: 12, type: "dip-short" },
 
   // CRT — also collidable
-  { x: 920, y: 222, w: 32,  h: 32, type: "crt" },
+  { x: 920, y: 222, w: 32, h: 32, type: "crt" },
 ];
 
 // Floppy "?" disks — bumped from below to reveal a fact.
 const FLOPPIES_DATA = [
-  { x: 92,  y: 184, label: "EMAIL",    reveal: "max@flach.io" },
+  { x: 92, y: 184, label: "EMAIL", reveal: "max@flach.io" },
   { x: 274, y: 100, label: "LINKEDIN", reveal: "/in/max-flach-67527618" },
   {
     x: 588, y: 124, label: "NOW",
@@ -113,31 +113,30 @@ const FLOPPIES_DATA = [
     x: 768, y: 130, label: "STACK",
     reveal: [
       "[ LANGUAGES ]",
-      "  c  c++  js  ts  python  go  rust  ruby  java  kotlin",
-      "  php  perl  lua  bash  zsh  awk  sed  sql",
+      "  c  c++  js  ts  python  go  rust php",
+      "  perl  lua  bash  zsh  awk  sed  sql",
       "",
       "[ FRONTEND ]",
-      "  react  next  vue  svelte  solid  angular",
-      "  vite  webpack  esbuild  tailwind  three.js  pixi.js",
+      "  react  vue  svelte  solid  vanilla  vite ",
+      "  webpack  esbuild  tailwind  three.js  pixi.js",
       "",
       "[ BACKEND ]",
-      "  node  express  fastify  nestjs  deno  bun",
-      "  django  flask  fastapi  rails  laravel  phoenix",
-      "  gin  echo  actix  grpc  graphql  rest  websockets",
+      "  node  express deno  bun  fastapi",
+      "  php  gin  grpc  graphql  rest",
+      "  websockets",
       "",
       "[ DATA ]",
-      "  postgres  mysql  mariadb  sqlite  redis  memcached",
-      "  mongodb  cassandra  elasticsearch  clickhouse",
-      "  bigquery  snowflake  duckdb  kafka  rabbitmq  nats",
+      "  postgres  mysql  parquett  sqlite  redis  memcached",
+      "  mongodb  cassandra  elasticsearch  duckdb  mqtt",
+      "  bigquery  snowflake  rabbitmq  nats",
       "",
       "[ INFRA ]",
-      "  docker  k8s  helm  terraform  pulumi  ansible",
-      "  aws  gcp  azure  cloudflare  fastly  vercel  fly.io",
+      "  docker  k8s  helm  terraform  aws  gcp",
+      "  cloudflare  fastly  vercel  fly.io",
       "  linux  nginx  caddy  haproxy  traefik",
       "",
       "[ OBSERVABILITY ]",
       "  prometheus  grafana  datadog  sentry  honeycomb",
-      "  opentelemetry  elk  loki  tempo  jaeger",
       "",
       "[ CI / CD ]",
       "  github actions  gitlab ci  circleci  jenkins",
@@ -148,10 +147,10 @@ const FLOPPIES_DATA = [
       "  openai  anthropic  claude  gemini  ollama",
       "",
       "[ TOOLS ]",
-      "  git  tmux  neovim  vscode  cursor  claude code",
+      "  git  tmux  vim  claude code",
       "  figma  notion  linear  slack",
       "",
-      "...and whatever ships next.",
+      "tools are easy. taste takes 30 years.",
     ].join("\n"),
   },
 ];
@@ -159,13 +158,13 @@ const FLOPPIES_DATA = [
 // Background props — purely decorative, no collision.
 const PROPS = [
   // Resistors (horizontal yellow capsules with color bands)
-  { type: "resistor", x: 16,  y: 246, bands: ["#A02020", "#202020", "#A02020"] },
+  { type: "resistor", x: 16, y: 246, bands: ["#A02020", "#202020", "#A02020"] },
   { type: "resistor", x: 144, y: 246, bands: ["#FFD030", "#202020", "#FFD030"] },
   { type: "resistor", x: 332, y: 246, bands: ["#A02020", "#A02020", "#202020"] },
   { type: "resistor", x: 638, y: 246, bands: ["#3060FF", "#FFD030", "#202020"] },
   { type: "resistor", x: 836, y: 246, bands: ["#FFD030", "#A02020", "#3060FF"] },
   // Small capacitors scattered along the ground
-  { type: "smallcap", x: 36,  y: 240 },
+  { type: "smallcap", x: 36, y: 240 },
   { type: "smallcap", x: 220, y: 240 },
   { type: "smallcap", x: 350, y: 240 },
   { type: "smallcap", x: 552, y: 240 },
@@ -184,28 +183,28 @@ const PROPS = [
 
 // Blinking LEDs around the board.
 const LEDS = [
-  { x: 30,  y: 30,  c: "#FF3030", phase: 0   },
-  { x: 100, y: 60,  c: "#30FF60", phase: 0.3 },
-  { x: 250, y: 28,  c: "#FFD030", phase: 0.6 },
-  { x: 380, y: 48,  c: "#3060FF", phase: 0.9 },
-  { x: 520, y: 28,  c: "#FF3030", phase: 0.2 },
-  { x: 700, y: 48,  c: "#30FF60", phase: 0.5 },
-  { x: 800, y: 28,  c: "#FFD030", phase: 0.8 },
-  { x: 900, y: 56,  c: "#3060FF", phase: 0.1 },
+  { x: 30, y: 30, c: "#FF3030", phase: 0 },
+  { x: 100, y: 60, c: "#30FF60", phase: 0.3 },
+  { x: 250, y: 28, c: "#FFD030", phase: 0.6 },
+  { x: 380, y: 48, c: "#3060FF", phase: 0.9 },
+  { x: 520, y: 28, c: "#FF3030", phase: 0.2 },
+  { x: 700, y: 48, c: "#30FF60", phase: 0.5 },
+  { x: 800, y: 28, c: "#FFD030", phase: 0.8 },
+  { x: 900, y: 56, c: "#3060FF", phase: 0.1 },
 ];
 
 // Polyline traces. Each is a list of points; we draw segments between them and
 // animate a small data packet along the path.
 const TRACE_PATHS = [
-  [{ x: 0,   y: 90  }, { x: 200, y: 90  }, { x: 200, y: 130 }, { x: 480, y: 130 }, { x: 480, y: 80  }, { x: WORLD_W, y: 80 }],
-  [{ x: 50,  y: 240 }, { x: 50,  y: 100 }, { x: 130, y: 100 }],
-  [{ x: 320, y: 240 }, { x: 320, y: 60  }, { x: 470, y: 60  }],
-  [{ x: 680, y: 240 }, { x: 680, y: 50  }, { x: 920, y: 50  }],
+  [{ x: 0, y: 90 }, { x: 200, y: 90 }, { x: 200, y: 130 }, { x: 480, y: 130 }, { x: 480, y: 80 }, { x: WORLD_W, y: 80 }],
+  [{ x: 50, y: 240 }, { x: 50, y: 100 }, { x: 130, y: 100 }],
+  [{ x: 320, y: 240 }, { x: 320, y: 60 }, { x: 470, y: 60 }],
+  [{ x: 680, y: 240 }, { x: 680, y: 50 }, { x: 920, y: 50 }],
   [{ x: 220, y: 240 }, { x: 220, y: 200 }, { x: 360, y: 200 }],
 ];
 
 const TRACE_COLOR = "#A8842A";
-const TRACE_PAD   = "#C8A038";
+const TRACE_PAD = "#C8A038";
 
 // Precompute polyline segment lengths.
 const TRACE_META = TRACE_PATHS.map((path) => {
@@ -603,7 +602,7 @@ export default function Home() {
         return;
       }
       if (cancelled || !threeHostRef.current) {
-        try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch {}
+        try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch { }
         return;
       }
       pixiCanvasRef.current = app.canvas; // do NOT append to DOM
@@ -707,9 +706,9 @@ export default function Home() {
           const halfW = sceneRef.current.screenW / 2;
           const halfH = sceneRef.current.screenH / 2;
           projCorners[0].set(-halfW, -halfH, 0);
-          projCorners[1].set( halfW, -halfH, 0);
-          projCorners[2].set( halfW,  halfH, 0);
-          projCorners[3].set(-halfW,  halfH, 0);
+          projCorners[1].set(halfW, -halfH, 0);
+          projCorners[2].set(halfW, halfH, 0);
+          projCorners[3].set(-halfW, halfH, 0);
           let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
           for (const c of projCorners) {
             c.applyMatrix4(sm.matrixWorld).project(camera);
@@ -761,7 +760,7 @@ export default function Home() {
         }
       }
       if (app) {
-        try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch {}
+        try { app.destroy(true, { children: true, texture: true, textureSource: true }); } catch { }
       }
       pixiCanvasRef.current = null;
     };
@@ -805,8 +804,8 @@ export default function Home() {
   function draw(ctx) {
     const s = stateRef.current;
 
-    if (s.mode === "boot")     { drawBoot(ctx, s); return; }
-    if (s.mode === "menu")     { drawMenu(ctx, s); return; }
+    if (s.mode === "boot") { drawBoot(ctx, s); return; }
+    if (s.mode === "menu") { drawMenu(ctx, s); return; }
     if (s.mode === "terminal") { drawTerminal(ctx, s); return; }
 
     const cam = Math.round(s.cameraX);
@@ -987,14 +986,14 @@ function drawTraces(ctx, t) {
 // ===== SOLIDS =====
 function drawSolid(ctx, s, t) {
   switch (s.type) {
-    case "pcb-ground":     return drawPcbGround(ctx, s);
-    case "ram":            return drawRam(ctx, s);
+    case "pcb-ground": return drawPcbGround(ctx, s);
+    case "ram": return drawRam(ctx, s);
     case "dip-long":
-    case "dip-short":      return drawDip(ctx, s);
-    case "caps":           return drawCaps(ctx, s);
-    case "heatsink":       return drawHeatsink(ctx, s);
-    case "cpu-socket":     return drawCpuSocket(ctx, s);
-    case "crt":            return drawCrt(ctx, s, t);
+    case "dip-short": return drawDip(ctx, s);
+    case "caps": return drawCaps(ctx, s);
+    case "heatsink": return drawHeatsink(ctx, s);
+    case "cpu-socket": return drawCpuSocket(ctx, s);
+    case "crt": return drawCrt(ctx, s, t);
     default:
       ctx.fillStyle = "#888";
       ctx.fillRect(s.x, s.y, s.w, s.h);
@@ -1521,16 +1520,16 @@ function drawFloppy(ctx, f) {
 
 // ===== PLAYER (developer-ish sprite, 12w x 16h) =====
 const C = {
-  hair:   "#3A2412",   // dark brown
-  skin:   "#F4C8A8",
+  hair: "#3A2412",   // dark brown
+  skin: "#F4C8A8",
   hoodie: "#2A6B7B",   // teal
-  hoodieS:"#1A4651",   // hoodie shadow
+  hoodieS: "#1A4651",   // hoodie shadow
   string: "#D8E8E8",   // hoodie drawstrings
-  pants:  "#1A1A2A",
-  shoe:   "#0E0E14",
-  sole:   "#F0F0F0",
-  black:  "#181818",
-  white:  "#FCFCFC",
+  pants: "#1A1A2A",
+  shoe: "#0E0E14",
+  sole: "#F0F0F0",
+  black: "#181818",
+  white: "#FCFCFC",
 };
 
 function drawPlayer(ctx, p) {
@@ -1541,7 +1540,7 @@ function drawPlayer(ctx, p) {
 
   // ---- Hair (top + sides, no cap) ----
   ctx.fillStyle = C.hair;
-  ctx.fillRect(x + 3, y,     6, 1);
+  ctx.fillRect(x + 3, y, 6, 1);
   ctx.fillRect(x + 2, y + 1, 8, 2);
   // sides extending down to ear-level
   ctx.fillRect(x + 2, y + 3, 1, 2);
@@ -1591,7 +1590,7 @@ function drawPlayer(ctx, p) {
 
   // ---- Hands (skin), poking out of sleeves ----
   ctx.fillStyle = C.skin;
-  ctx.fillRect(x,     y + 10, 1, 2);
+  ctx.fillRect(x, y + 10, 1, 2);
   ctx.fillRect(x + 11, y + 10, 1, 2);
 
   // ---- Pants (dark) ----
@@ -1619,10 +1618,10 @@ function drawPlayer(ctx, p) {
   ctx.fillStyle = C.shoe;
   if (p.onGround && Math.abs(p.vx) > 0.1) {
     if (stepFrame === 0) {
-      ctx.fillRect(x,     y + 15, 4, 1);
+      ctx.fillRect(x, y + 15, 4, 1);
       ctx.fillRect(x + 7, y + 15, 5, 1);
     } else {
-      ctx.fillRect(x,     y + 15, 5, 1);
+      ctx.fillRect(x, y + 15, 5, 1);
       ctx.fillRect(x + 8, y + 15, 4, 1);
     }
   } else if (!p.onGround) {
