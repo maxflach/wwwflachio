@@ -1273,9 +1273,122 @@ function drawBoot(ctx, s) {
   }
 }
 
+// Faded, chunky 8-bit version of the Flach family coat of arms — drawn as the
+// boot-menu watermark. Quartered shield (gold/black bars), blue helm with red
+// visor slits, gold/black checkered plume, and gold mantling on the sides.
+function drawShieldWatermark(ctx) {
+  ctx.save();
+  ctx.globalAlpha = 0.16;
+
+  const GOLD = "#D9A41E";
+  const GOLD_DK = "#9B7A1B";
+  const BLACK = "#181818";
+  const HELM_BLUE = "#2A6BC0";
+  const HELM_BLUE_HI = "#5BAEF5";
+  const VISOR_RED = "#A82828";
+
+  const cx = VIEW_W / 2;
+
+  // ----- Plume (top, vertical, checkered black/gold) -----
+  const plumeX = cx - 6;
+  const plumeW = 12;
+  const plumeY = 22;
+  const plumeRows = 9;
+  // Tip
+  ctx.fillStyle = GOLD;
+  ctx.fillRect(plumeX + 4, plumeY - 4, 4, 4);
+  // Checkered body
+  for (let r = 0; r < plumeRows; r++) {
+    const y = plumeY + r * 4;
+    if (r % 2 === 0) {
+      ctx.fillStyle = GOLD;
+      ctx.fillRect(plumeX, y, plumeW / 2, 4);
+      ctx.fillStyle = BLACK;
+      ctx.fillRect(plumeX + plumeW / 2, y, plumeW / 2, 4);
+    } else {
+      ctx.fillStyle = BLACK;
+      ctx.fillRect(plumeX, y, plumeW / 2, 4);
+      ctx.fillStyle = GOLD;
+      ctx.fillRect(plumeX + plumeW / 2, y, plumeW / 2, 4);
+    }
+  }
+
+  // ----- Helmet (trapezoid: narrow top, wide bottom) -----
+  const helmTop = plumeY + plumeRows * 4 + 2;
+  const helmH = 16;
+  for (let i = 0; i < helmH; i++) {
+    const w = 14 + Math.floor(i / 2);
+    ctx.fillStyle = HELM_BLUE;
+    ctx.fillRect(cx - Math.floor(w / 2), helmTop + i, w, 1);
+  }
+  // Top highlight
+  ctx.fillStyle = HELM_BLUE_HI;
+  ctx.fillRect(cx - 5, helmTop, 10, 1);
+  // Visor slits
+  ctx.fillStyle = VISOR_RED;
+  for (let s = 0; s < 3; s++) {
+    ctx.fillRect(cx - 6, helmTop + 4 + s * 3, 12, 2);
+  }
+  // Helmet bottom edge (gold)
+  ctx.fillStyle = GOLD;
+  ctx.fillRect(cx - 9, helmTop + helmH, 18, 2);
+
+  // ----- Shield body (quartered: alternating gold/black bars, reversed L/R) -----
+  const sw = 64;
+  const sh = 72;
+  const sx = cx - sw / 2;
+  const sy = helmTop + helmH + 4;
+
+  // Black backing for outline
+  ctx.fillStyle = BLACK;
+  ctx.fillRect(sx - 2, sy - 2, sw + 4, sh + 4);
+
+  // Clip to a shield outline (rectangular top, pointed at the bottom)
+  ctx.save();
+  ctx.beginPath();
+  const shoulder = sy + sh - 16;
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(sx + sw, sy);
+  ctx.lineTo(sx + sw, shoulder);
+  ctx.lineTo(cx, sy + sh);
+  ctx.lineTo(sx, shoulder);
+  ctx.closePath();
+  ctx.clip();
+
+  const stripeH = 12;
+  const halfW = sw / 2;
+  for (let i = 0; i < 6; i++) {
+    const y = sy + i * stripeH;
+    const goldLeft = i % 2 === 0;
+    ctx.fillStyle = goldLeft ? GOLD : BLACK;
+    ctx.fillRect(sx, y, halfW, stripeH + 1);
+    ctx.fillStyle = goldLeft ? BLACK : GOLD;
+    ctx.fillRect(sx + halfW, y, halfW, stripeH + 1);
+  }
+  ctx.restore();
+
+  // ----- Mantling: chunky gold flourishes on either side of the shield -----
+  ctx.fillStyle = GOLD_DK;
+  const bumpsLeft = [
+    [-8,  6, 6, 4], [-10, 14, 8, 4], [-9, 22, 7, 4],
+    [-11, 32, 9, 4], [-9, 42, 7, 4], [-7, 52, 6, 4],
+  ];
+  const bumpsRight = [
+    [sw + 2, 6, 6, 4], [sw + 2, 14, 8, 4], [sw + 2, 22, 7, 4],
+    [sw + 2, 32, 9, 4], [sw + 2, 42, 7, 4], [sw + 1, 52, 6, 4],
+  ];
+  for (const [dx, dy, w, h] of bumpsLeft)  ctx.fillRect(sx + dx, sy + dy, w, h);
+  for (const [dx, dy, w, h] of bumpsRight) ctx.fillRect(sx + dx, sy + dy, w, h);
+
+  ctx.restore();
+}
+
 function drawMenu(ctx, s) {
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  // 8-bit family coat of arms watermark behind everything else
+  drawShieldWatermark(ctx);
 
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
