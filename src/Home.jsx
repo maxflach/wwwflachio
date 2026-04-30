@@ -280,6 +280,7 @@ export default function Home() {
   // The DOM overlay that takes over the screen on disk pickup is positioned to
   // exactly cover the 3D monitor's screen plane; this ref points at the DOM div.
   const screenOverlayRef = useRef(null);
+  const revealBodyRef = useRef(null);
 
   function fireReveal(data) {
     stateRef.current.reveal = data;
@@ -410,10 +411,20 @@ export default function Home() {
 
       // ----- Game mode -----
       if (s.reveal) {
-        // Reveal modal is up — Esc closes it; everything else is blocked
+        // Reveal modal is up: Esc closes; arrows scroll the body
         if (k === "Escape") {
           e.preventDefault();
           clearReveal();
+          return;
+        }
+        if (k === "ArrowDown" || k === "ArrowUp" || k === "PageDown" || k === "PageUp") {
+          e.preventDefault();
+          const body = revealBodyRef.current;
+          if (body) {
+            const step = k === "PageDown" || k === "PageUp" ? body.clientHeight * 0.85 : 28;
+            body.scrollBy({ top: (k === "ArrowUp" || k === "PageUp") ? -step : step, behavior: "smooth" });
+          }
+          return;
         }
         return;
       }
@@ -514,7 +525,7 @@ export default function Home() {
 
     if (Math.abs(p.vx) > 0.1 && p.onGround) p.anim += 0.2 * dt;
 
-    // X
+    // ---- X movement: floppies are solid blocks (you can walk into the side of them) ----
     p.x += p.vx * dt;
     for (const sol of SOLIDS) {
       if (rectsOverlap(p, sol)) {
@@ -523,10 +534,17 @@ export default function Home() {
         p.vx = 0;
       }
     }
+    for (const f of s.floppies) {
+      if (rectsOverlap(p, f)) {
+        if (p.vx > 0) p.x = f.x - p.w;
+        else if (p.vx < 0) p.x = f.x + f.w;
+        p.vx = 0;
+      }
+    }
     if (p.x < 0) p.x = 0;
     if (p.x + p.w > WORLD_W) p.x = WORLD_W - p.w;
 
-    // Y
+    // ---- Y movement: floppies block from below AND can be stood on ----
     p.y += p.vy * dt;
     p.onGround = false;
     for (const sol of SOLIDS) {
@@ -541,22 +559,32 @@ export default function Home() {
         }
       }
     }
-    if (p.y > VIEW_H + 50) {
-      p.x = 24; p.y = 200; p.vx = 0; p.vy = 0;
-    }
-
-    // Floppy bumps
     for (const f of s.floppies) {
+      // Decay the bump animation regardless of overlap
       if (f.bump > 0) f.bump = Math.max(0, f.bump - 0.6 * dt);
-      if (!f.hit && rectsOverlap(p, { x: f.x, y: f.y, w: f.w, h: f.h })) {
-        if (p.vy <= 0 && p.y + 2 > f.y) {
+
+      if (!rectsOverlap(p, f)) continue;
+
+      if (p.vy > 0) {
+        // Land on top — floppy as a solid platform
+        p.y = f.y - p.h;
+        p.vy = 0;
+        p.onGround = true;
+      } else if (p.vy < 0) {
+        // Hit from below — block + (if first time) trigger the reveal
+        p.y = f.y + f.h;
+        p.vy = 0;
+        if (!f.hit) {
           f.hit = true;
           f.bump = 6;
-          p.vy = Math.max(p.vy, 0.5);
           fireReveal({ label: f.label, text: f.reveal });
           setFoundCount((c) => c + 1);
         }
       }
+    }
+
+    if (p.y > VIEW_H + 50) {
+      p.x = 24; p.y = 200; p.vx = 0; p.vy = 0;
     }
 
     // CRT proximity (canvas-rendered hint reads s.crtNear directly)
@@ -898,7 +926,7 @@ export default function Home() {
       >
         {reveal && (
           <div
-            className="w-full h-full bg-[#020210] text-[#C0E0FF] flex flex-col pointer-events-auto"
+            className="reveal-crt w-full h-full bg-[#020210] text-[#C0E0FF] flex flex-col pointer-events-auto"
             style={{
               fontFamily: "'Press Start 2P', monospace",
               boxShadow: "inset 0 0 60px rgba(0,0,0,0.7)",
@@ -921,6 +949,7 @@ export default function Home() {
 
             {/* Body — linkified content, fills full width of the screen */}
             <div
+              ref={revealBodyRef}
               className="flex-1 overflow-auto px-3 py-2 leading-snug terminal-scroll"
               style={{ fontSize: "clamp(7px, 0.95vw, 12px)" }}
             >
@@ -937,7 +966,7 @@ export default function Home() {
 
             {/* Footer hint */}
             <div className="px-3 py-2 text-[8px] text-[#666] tracking-widest border-t border-[#9CC8FC]/20 text-center">
-              ESC OR [ X ] TO CLOSE
+              UP / DOWN  SCROLL    ESC OR [ X ]  CLOSE
             </div>
           </div>
         )}

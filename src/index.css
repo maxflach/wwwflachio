@@ -21,3 +21,36 @@
   scrollbar-width: thin;
   scrollbar-color: #334155 transparent;
 }
+
+/* ===== Faux-CRT effects on the reveal modal so it matches the in-monitor look ===== */
+.reveal-crt {
+  position: relative;
+  /* faint chromatic edge on text — RGB-split lite */
+  text-shadow: 0.5px 0 rgba(255, 80, 80, 0.55), -0.5px 0 rgba(80, 160, 255, 0.55);
+}
+.reveal-crt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.22) 0,
+    rgba(0, 0, 0, 0.22) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: multiply;
+}
+.reveal-crt::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 55%,
+    rgba(0, 0, 0, 0.55) 100%
+  );
+  z-index: 1;
+}
