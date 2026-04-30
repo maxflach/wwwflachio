@@ -96,6 +96,93 @@ function makeWoodTexture() {
   return tex;
 }
 
+// Plastic bump map: pebble-grain noise + a few low-frequency surface blots.
+// NOT a color texture — sampled as height data, so colorSpace = NoColorSpace.
+function makePlasticBumpMap() {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+
+  // Mid-grey base (height = 0.5 = no displacement)
+  ctx.fillStyle = "rgb(128,128,128)";
+  ctx.fillRect(0, 0, size, size);
+
+  // Per-pixel pebble grain
+  const img = ctx.getImageData(0, 0, size, size);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 60;
+    const v = Math.max(0, Math.min(255, 128 + n));
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // Low-freq blots — slightly raised / sunken patches simulating uneven mold
+  for (let i = 0; i < 30; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = Math.random() * 30 + 12;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const v = Math.random() < 0.5 ? 100 : 156;
+    g.addColorStop(0, `rgba(${v},${v},${v},0.3)`);
+    g.addColorStop(1, `rgba(${v},${v},${v},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Roughness variation map: mostly mid value with subtle per-pixel and
+// low-freq variation, so the plastic isn't uniformly shiny.
+function makeRoughnessMap() {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+
+  ctx.fillStyle = "rgb(160,160,160)";
+  ctx.fillRect(0, 0, size, size);
+
+  const img = ctx.getImageData(0, 0, size, size);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 30;
+    const v = Math.max(0, Math.min(255, 160 + n));
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // Slightly less-rough (shinier) patches scattered around
+  for (let i = 0; i < 15; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = Math.random() * 30 + 14;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, "rgba(80,80,80,0.4)");
+    g.addColorStop(1, "rgba(80,80,80,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
 // Speaker grille texture — fine dot pattern
 function makeGrilleTexture() {
   const size = 128;
@@ -218,25 +305,50 @@ let TEXTURES = null;
 function getTextures() {
   if (TEXTURES) return TEXTURES;
   TEXTURES = {
-    body:       makePlasticTexture(PALETTE.body, 2, 50, 22),
-    bodyShadow: makePlasticTexture(PALETTE.bodyShadow, 2.5, 60, 24),
-    bodyDeep:   makePlasticTexture(PALETTE.bodyDeep, 3, 60, 26),
+    body:       makePlasticTexture(PALETTE.body, 4, 60, 22),
+    bodyShadow: makePlasticTexture(PALETTE.bodyShadow, 4, 70, 24),
+    bodyDeep:   makePlasticTexture(PALETTE.bodyDeep, 5, 70, 26),
     keyTop:     makePlasticTexture(PALETTE.keyTop, 1, 18, 14),
     speaker:    makePlasticTexture(PALETTE.darkSoft, 3, 90, 30),
     wood:       makeWoodTexture(),
     grille:     makeGrilleTexture(),
+    bump:       makePlasticBumpMap(),
+    roughness:  makeRoughnessMap(),
   };
+  // Bump every diffuse map's anisotropy up so oblique faces stay crisp.
+  for (const k of ["body", "bodyShadow", "bodyDeep", "keyTop", "speaker", "wood"]) {
+    TEXTURES[k].anisotropy = 8;
+  }
   return TEXTURES;
 }
 
 // ===== Helpers =====
+// Plastic body material — diffuse + bump for micro-grain + roughness variation +
+// thin clearcoat layer for that polished-plastic sheen.
+function makePlasticMaterial({ map, roughness = 0.62, clearcoat = 0.28, clearcoatRoughness = 0.55, bumpScale = 0.0035 }) {
+  const tex = getTextures();
+  return new THREE.MeshPhysicalMaterial({
+    map,
+    bumpMap: tex.bump,
+    bumpScale,
+    roughnessMap: tex.roughness,
+    roughness,
+    clearcoat,
+    clearcoatRoughness,
+    metalness: 0.0,
+  });
+}
+
 let sharedKeyMaterial = null;
 function getKeyMaterial() {
   if (!sharedKeyMaterial) {
-    sharedKeyMaterial = new THREE.MeshStandardMaterial({
+    // Keys are matte plastic — heavier roughness, very thin clearcoat
+    sharedKeyMaterial = makePlasticMaterial({
       map: getTextures().keyTop,
-      roughness: 0.55,
-      metalness: 0.0,
+      roughness: 0.7,
+      clearcoat: 0.08,
+      clearcoatRoughness: 0.7,
+      bumpScale: 0.0025,
     });
   }
   return sharedKeyMaterial;
@@ -514,9 +626,9 @@ export function buildComputerScene(pixiCanvas) {
 
   const tex = getTextures();
   const materials = {
-    matBody:       new THREE.MeshStandardMaterial({ map: tex.body, roughness: 0.65 }),
-    matBodyShadow: new THREE.MeshStandardMaterial({ map: tex.bodyShadow, roughness: 0.78 }),
-    matBodyDeep:   new THREE.MeshStandardMaterial({ map: tex.bodyDeep, roughness: 0.8 }),
+    matBody:       makePlasticMaterial({ map: tex.body,       roughness: 0.62, clearcoat: 0.30, clearcoatRoughness: 0.55 }),
+    matBodyShadow: makePlasticMaterial({ map: tex.bodyShadow, roughness: 0.74, clearcoat: 0.18, clearcoatRoughness: 0.7  }),
+    matBodyDeep:   makePlasticMaterial({ map: tex.bodyDeep,   roughness: 0.78, clearcoat: 0.12, clearcoatRoughness: 0.75 }),
     matDark:       new THREE.MeshStandardMaterial({ color: PALETTE.dark, roughness: 0.5 }),
   };
 
@@ -590,13 +702,17 @@ export function buildComputerScene(pixiCanvas) {
   // Pad the console depth a bit at the back (where the IBM logo + LEDs go)
   const backStripD = STRIDE * 1.0;
 
-  const flangeMat = new THREE.MeshStandardMaterial({
+  const flangeMat = makePlasticMaterial({
     map: tex.bodyDeep,
-    roughness: 0.82,
+    roughness: 0.78,
+    clearcoat: 0.12,
+    clearcoatRoughness: 0.75,
   });
-  const consoleMat = new THREE.MeshStandardMaterial({
+  const consoleMat = makePlasticMaterial({
     map: tex.body,
-    roughness: 0.65,
+    roughness: 0.62,
+    clearcoat: 0.30,
+    clearcoatRoughness: 0.55,
   });
 
   const flange = new THREE.Mesh(
