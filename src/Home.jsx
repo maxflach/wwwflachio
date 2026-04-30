@@ -4,6 +4,10 @@ import { CRTFilter, RGBSplitFilter } from "pixi-filters";
 import * as THREE from "three";
 import { buildComputerScene, setKeyState } from "./computerModel";
 import { run as runTerminal, makePrompt, complete as completeTerminal } from "./terminalCore";
+import TouchControls from "./TouchControls";
+
+const IS_TOUCH = typeof window !== "undefined" &&
+  ("ontouchstart" in window || (navigator?.maxTouchPoints || 0) > 0);
 
 // Pixi internal render-target dimensions. Higher than the game canvas so the CRT
 // filter scanlines/noise stay crisp when sampled as a texture in 3D.
@@ -281,6 +285,7 @@ export default function Home() {
   // exactly cover the 3D monitor's screen plane; this ref points at the DOM div.
   const screenOverlayRef = useRef(null);
   const revealBodyRef = useRef(null);
+  const terminalBridgeRef = useRef(null);
 
   function fireReveal(data) {
     stateRef.current.reveal = data;
@@ -303,6 +308,10 @@ export default function Home() {
   useEffect(() => {
     const s = stateRef.current;
     function down(e) {
+      // Native events fired on the soft-keyboard bridge are handled by the
+      // bridge itself (which synthesizes window-level events as needed). Skip
+      // here to avoid double-processing.
+      if (IS_TOUCH && e.target === terminalBridgeRef.current) return;
       const k = e.key;
 
       // ----- Boot screen: any key skips ahead to the menu -----
@@ -677,9 +686,23 @@ export default function Home() {
         0.1,
         100
       );
-      // Pulled back + raised so the keyboard lands in the lower third of the frame.
-      const camBase = new THREE.Vector3(0, 5.4, 9.4);
-      const camTarget = new THREE.Vector3(0, 0.6, 1.1);
+      // Two camera presets — landscape shows the full hero shot; portrait
+      // pulls in tight on the monitor since the keyboard barely fits in 9:16.
+      const PRESETS = {
+        landscape: { fov: 36, base: new THREE.Vector3(0, 5.4, 9.4), target: new THREE.Vector3(0, 0.6, 1.1) },
+        portrait:  { fov: 44, base: new THREE.Vector3(0, 3.2, 8.0), target: new THREE.Vector3(0, 1.8, 0.0) },
+      };
+      const camBase = new THREE.Vector3();
+      const camTarget = new THREE.Vector3();
+      function applyPreset() {
+        const aspect = host.clientWidth / Math.max(1, host.clientHeight);
+        const p = aspect >= 1 ? PRESETS.landscape : PRESETS.portrait;
+        camBase.copy(p.base);
+        camTarget.copy(p.target);
+        camera.fov = p.fov;
+        camera.updateProjectionMatrix();
+      }
+      applyPreset();
       camera.position.copy(camBase);
       camera.lookAt(camTarget);
 
@@ -694,6 +717,9 @@ export default function Home() {
       sceneRef.current = built;
 
       onMouseMove = (e) => {
+        // Skip parallax on touch — touch-driven pointermove events would jerk
+        // the camera every time a button is tapped.
+        if (e.pointerType === "touch") return;
         mouseX = (e.clientX / window.innerWidth) * 2 - 1;
         mouseY = (e.clientY / window.innerHeight) * 2 - 1;
       };
@@ -703,6 +729,7 @@ export default function Home() {
         if (!host) return;
         const w = host.clientWidth, h = Math.max(1, host.clientHeight);
         camera.aspect = w / h;
+        applyPreset(); // re-pick portrait/landscape preset
         camera.updateProjectionMatrix();
         renderer.setSize(w, h);
       };
@@ -915,6 +942,20 @@ export default function Home() {
     >
       {/* Three.js canvas mounts here — renders the 3D 486 with the live screen */}
       <div ref={threeHostRef} className="absolute inset-0" />
+
+      {/* Mobile-only: on-screen control deck synthesizing keyboard events */}
+      {IS_TOUCH && <TouchControls mode={mode} revealOpen={!!reveal} />}
+
+      {/* Mobile-only: soft-keyboard bridge for the terminal — a hidden input
+          that's auto-focused so iOS/Android pop their native keyboard.
+          Char additions/removals are diffed and dispatched as key events
+          to feed the existing terminal handler. */}
+      {IS_TOUCH && mode === "terminal" && (
+        <TerminalSoftKeyboardBridge
+          inputRef={terminalBridgeRef}
+          getCurrent={() => stateRef.current.terminal.input}
+        />
+      )}
 
       {/* DOM overlay positioned to exactly cover the 3D monitor's screen plane.
           Hidden visually unless `reveal` is set. Always present in the DOM so
@@ -1324,6 +1365,83 @@ function textWithShadow(ctx, text, x, y, fill) {
   ctx.fillText(text, x + 1, y + 1);
   ctx.fillStyle = fill;
   ctx.fillText(text, x, y);
+}
+
+// Hidden <input> that brings up the native soft keyboard and converts each
+// input-event delta into a synthesized window keydown so the existing terminal
+// handler in Home.jsx picks it up unchanged.
+function TerminalSoftKeyboardBridge({ inputRef, getCurrent }) {
+  return (
+    <input
+      ref={(el) => {
+        inputRef.current = el;
+        if (el) {
+          el.value = getCurrent() || "";
+          el.dataset.last = el.value;
+          // Defer focus to next tick so iOS actually pops the keyboard
+          setTimeout(() => el.focus(), 50);
+        }
+      }}
+      type="text"
+      autoCapitalize="none"
+      autoCorrect="off"
+      autoComplete="off"
+      spellCheck={false}
+      inputMode="text"
+      onInput={(e) => {
+        const el = e.currentTarget;
+        const next = el.value;
+        const prev = el.dataset.last || "";
+        if (next.length > prev.length) {
+          for (const ch of next.slice(prev.length)) {
+            window.dispatchEvent(
+              new KeyboardEvent("keydown", { key: ch, bubbles: true })
+            );
+          }
+        } else if (next.length < prev.length) {
+          const diff = prev.length - next.length;
+          for (let i = 0; i < diff; i++) {
+            window.dispatchEvent(
+              new KeyboardEvent("keydown", { key: "Backspace", code: "Backspace", bubbles: true })
+            );
+          }
+        }
+        el.dataset.last = next;
+      }}
+      onKeyDown={(e) => {
+        // Special keys typed on the bridge get forwarded to window directly
+        // so the global terminal handler runs them. Plain letters are picked up
+        // via onInput's diff; native keydowns on letters are filtered out by
+        // the global `down` early-return above.
+        const special = ["Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+        if (special.includes(e.key)) {
+          e.preventDefault();
+          window.dispatchEvent(
+            new KeyboardEvent("keydown", { key: e.key, code: e.code, bubbles: true })
+          );
+          if (e.key === "Enter") {
+            requestAnimationFrame(() => {
+              const el = inputRef.current;
+              if (el) { el.value = ""; el.dataset.last = ""; }
+            });
+          }
+        }
+      }}
+      onBlur={(e) => {
+        // Keep focus glued — losing it kills the soft keyboard mid-session
+        setTimeout(() => e.target.focus(), 0);
+      }}
+      className="absolute opacity-0 pointer-events-auto"
+      style={{
+        left: 0,
+        top: 0,
+        width: 1,
+        height: 1,
+        // 16px+ prevents iOS from auto-zooming when focused
+        fontSize: 16,
+      }}
+    />
+  );
 }
 
 // Wrap email/URL substrings in clickable <a>. Non-matching text stays plain.
