@@ -1,9 +1,69 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
-// Bevelled box helper — small radius, low segment count keeps the look chunky-but-soft.
+// World-space box-projected UVs. Walks every vertex, picks the dominant
+// face by normal, and re-projects UVs from world position so texel density
+// stays consistent in world units regardless of the face's aspect ratio.
+// (BoxGeometry/RoundedBoxGeometry default UVs go 0..1 per face, which makes
+// rectangular faces stretch the texture along their long axis.)
+function setBoxUVsByNormal(geometry, density = 4) {
+  geometry.computeBoundingBox();
+  const bb = geometry.boundingBox;
+  const W = bb.max.x - bb.min.x;
+  const H = bb.max.y - bb.min.y;
+  const D = bb.max.z - bb.min.z;
+  const cx = (bb.min.x + bb.max.x) / 2;
+  const cy = (bb.min.y + bb.max.y) / 2;
+  const cz = (bb.min.z + bb.max.z) / 2;
+
+  const pos = geometry.attributes.position;
+  const norm = geometry.attributes.normal;
+  const uv = geometry.attributes.uv;
+  if (!pos || !norm || !uv) return;
+
+  for (let i = 0; i < pos.count; i++) {
+    const px = pos.getX(i) - cx;
+    const py = pos.getY(i) - cy;
+    const pz = pos.getZ(i) - cz;
+    const ax = Math.abs(norm.getX(i));
+    const ay = Math.abs(norm.getY(i));
+    const az = Math.abs(norm.getZ(i));
+
+    let u, v;
+    if (ax >= ay && ax >= az) {
+      // ±X face: project onto (Z, Y)
+      u = (pz / D + 0.5) * D * density;
+      v = (py / H + 0.5) * H * density;
+    } else if (ay >= ax && ay >= az) {
+      // ±Y face: project onto (X, Z)
+      u = (px / W + 0.5) * W * density;
+      v = (pz / D + 0.5) * D * density;
+    } else {
+      // ±Z face: project onto (X, Y)
+      u = (px / W + 0.5) * W * density;
+      v = (py / H + 0.5) * H * density;
+    }
+    uv.setXY(i, u, v);
+  }
+  uv.needsUpdate = true;
+}
+
+// Bevelled box helper — small radius, low segment count keeps the look
+// chunky-but-soft. Now also re-projects UVs in world units so textures
+// don't stretch on rectangular faces.
 function rbox(w, h, d, radius = 0.04, segments = 3) {
-  return new RoundedBoxGeometry(w, h, d, segments, radius);
+  const geo = new RoundedBoxGeometry(w, h, d, segments, radius);
+  setBoxUVsByNormal(geo, 4);
+  return geo;
+}
+
+// Plain BoxGeometry with the same world-UV projection applied. Use this for
+// small body pieces (front panel, drive bays, brand plate, eject buttons)
+// that use a plastic material — keeps texel density consistent with rbox.
+function bodyBox(w, h, d, density = 4) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  setBoxUVsByNormal(geo, density);
+  return geo;
 }
 
 // ===== Procedural textures =====
@@ -305,11 +365,14 @@ let TEXTURES = null;
 function getTextures() {
   if (TEXTURES) return TEXTURES;
   TEXTURES = {
-    body:       makePlasticTexture(PALETTE.body, 4, 60, 22),
-    bodyShadow: makePlasticTexture(PALETTE.bodyShadow, 4, 70, 24),
-    bodyDeep:   makePlasticTexture(PALETTE.bodyDeep, 5, 70, 26),
+    // repeat=1 because the meshes apply world-projected UVs (setBoxUVsByNormal)
+    // which already encode tile density per world unit. The texture then tiles
+    // identically across every face regardless of face aspect ratio.
+    body:       makePlasticTexture(PALETTE.body, 1, 60, 22),
+    bodyShadow: makePlasticTexture(PALETTE.bodyShadow, 1, 70, 24),
+    bodyDeep:   makePlasticTexture(PALETTE.bodyDeep, 1, 70, 26),
     keyTop:     makePlasticTexture(PALETTE.keyTop, 1, 18, 14),
-    speaker:    makePlasticTexture(PALETTE.darkSoft, 3, 90, 30),
+    speaker:    makePlasticTexture(PALETTE.darkSoft, 1, 90, 30),
     wood:       makeWoodTexture(),
     grille:     makeGrilleTexture(),
     bump:       makePlasticBumpMap(),
@@ -459,18 +522,18 @@ function buildCase(materials) {
   group.add(body);
 
   // Recessed front face
-  const front = new THREE.Mesh(new THREE.BoxGeometry(W * 0.94, H * 0.88, 0.04), matBodyShadow);
+  const front = new THREE.Mesh(bodyBox(W * 0.94, H * 0.88, 0.04), matBodyShadow);
   front.position.set(0, H / 2, D / 2 - 0.005);
   group.add(front);
 
   // 5.25" CD-ROM bay
-  const cdBay = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.2, 0.04), matBodyDeep);
+  const cdBay = new THREE.Mesh(bodyBox(1.5, 0.2, 0.04), matBodyDeep);
   cdBay.position.set(0.6, H * 0.7, D / 2 + 0.001);
   group.add(cdBay);
   const cdSlot = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.025, 0.02), matDark);
   cdSlot.position.set(0.55, H * 0.71, D / 2 + 0.014);
   group.add(cdSlot);
-  const cdEject = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.04, 0.025), matBodyShadow);
+  const cdEject = new THREE.Mesh(bodyBox(0.07, 0.04, 0.025), matBodyShadow);
   cdEject.position.set(1.25, H * 0.69, D / 2 + 0.016);
   group.add(cdEject);
   // CD activity LED
@@ -482,13 +545,13 @@ function buildCase(materials) {
   group.add(cdLed);
 
   // 3.5" Floppy bay
-  const fdBay = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.13, 0.04), matBodyDeep);
+  const fdBay = new THREE.Mesh(bodyBox(1.0, 0.13, 0.04), matBodyDeep);
   fdBay.position.set(0.6, H * 0.4, D / 2 + 0.001);
   group.add(fdBay);
   const fdSlot = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.018, 0.02), matDark);
   fdSlot.position.set(0.55, H * 0.41, D / 2 + 0.014);
   group.add(fdSlot);
-  const fdEject = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.035, 0.025), matBodyShadow);
+  const fdEject = new THREE.Mesh(bodyBox(0.05, 0.035, 0.025), matBodyShadow);
   fdEject.position.set(0.95, H * 0.4, D / 2 + 0.016);
   group.add(fdEject);
 
@@ -573,7 +636,7 @@ function buildMonitor(materials, pixiCanvas) {
 
   // Brand plate below screen
   const brandPlate = new THREE.Mesh(
-    new THREE.BoxGeometry(W * 0.92, 0.32, 0.02),
+    bodyBox(W * 0.92, 0.32, 0.02),
     matBody
   );
   brandPlate.position.set(0, H * 0.13, D / 2 + 0.011);
