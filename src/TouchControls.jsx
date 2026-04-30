@@ -49,7 +49,7 @@ function TapBtn({ k, code, children, className = "" }) {
   );
 }
 
-export default function TouchControls({ mode, revealOpen }) {
+export default function TouchControls({ mode, revealOpen, kbHeight = 0 }) {
   if (mode === "boot") {
     return (
       <div className="absolute inset-0 z-40 pointer-events-auto" onTouchStart={(e) => { e.preventDefault(); tap("Enter", "Enter"); }}>
@@ -101,8 +101,12 @@ export default function TouchControls({ mode, revealOpen }) {
   }
 
   if (mode === "terminal") {
+    // Float the action strip just above the soft keyboard if it's open.
     return (
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2 z-40">
+      <div
+        className="absolute left-1/2 -translate-x-1/2 flex gap-2 z-40 transition-[bottom] duration-150 ease-out"
+        style={{ bottom: 12 + kbHeight }}
+      >
         <TapBtn k="Escape" code="Escape" className="w-16 h-10 text-xs px-2">ESC</TapBtn>
         <TapBtn k="Tab"    code="Tab"    className="w-16 h-10 text-xs px-2">TAB</TapBtn>
         <TapBtn k="ArrowUp"   code="ArrowUp"   className="w-12 h-10 text-base">▲</TapBtn>

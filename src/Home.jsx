@@ -71,6 +71,25 @@ export default function Home() {
   // show a "TAP TO TYPE" overlay until the bridge is actually focused.
   const [bridgeFocused, setBridgeFocused] = useState(false);
   useEffect(() => { if (mode !== "terminal") setBridgeFocused(false); }, [mode]);
+
+  // Track the soft-keyboard height via visualViewport so we can shift the
+  // 3D scene up (keyboard otherwise covers the lower half of the monitor).
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      setKbHeight(Math.max(0, window.innerHeight - vv.height - vv.offsetTop));
+    };
+    vv.addEventListener("resize", onResize);
+    vv.addEventListener("scroll", onResize);
+    onResize();
+    return () => {
+      vv.removeEventListener("resize", onResize);
+      vv.removeEventListener("scroll", onResize);
+    };
+  }, []);
+  const sceneShift = mode === "terminal" && kbHeight > 0 ? kbHeight * 0.5 : 0;
   const foundCountRef = useRef(0);
   useEffect(() => { foundCountRef.current = foundCount; }, [foundCount]);
 
@@ -701,11 +720,17 @@ export default function Home() {
       className="fixed inset-0 overflow-hidden bg-[#0a0805]"
       style={{ fontFamily: "'Press Start 2P', monospace" }}
     >
-      {/* Three.js canvas mounts here — renders the 3D 486 with the live screen */}
-      <div ref={threeHostRef} className="absolute inset-0" />
+      {/* Three.js canvas mounts here — renders the 3D 486 with the live screen.
+          When the soft keyboard is up in terminal mode, shift the scene up so
+          the monitor lands in the visible viewport above the keyboard. */}
+      <div
+        ref={threeHostRef}
+        className="absolute inset-0 transition-transform duration-150 ease-out"
+        style={{ transform: `translateY(-${sceneShift}px)` }}
+      />
 
       {/* Mobile-only: on-screen control deck synthesizing keyboard events */}
-      {IS_TOUCH && <TouchControls mode={mode} revealOpen={!!reveal} />}
+      {IS_TOUCH && <TouchControls mode={mode} revealOpen={!!reveal} kbHeight={kbHeight} />}
 
       {/* Mobile-only: soft-keyboard bridge for the terminal */}
       {IS_TOUCH && mode === "terminal" && (
@@ -744,11 +769,13 @@ export default function Home() {
 
       {/* DOM overlay positioned to exactly cover the 3D monitor's screen plane.
           Hidden visually unless `reveal` is set. Always present in the DOM so
-          the render loop can keep its position in sync with the camera. */}
+          the render loop can keep its position in sync with the camera. The
+          same translateY as the threeHost keeps the modal aligned with the
+          visually-shifted screen when the soft keyboard is up. */}
       <div
         ref={screenOverlayRef}
-        className="absolute pointer-events-none"
-        style={{ left: 0, top: 0, width: 0, height: 0, zIndex: 50 }}
+        className="absolute pointer-events-none transition-transform duration-150 ease-out"
+        style={{ left: 0, top: 0, width: 0, height: 0, zIndex: 50, transform: `translateY(-${sceneShift}px)` }}
       >
         {reveal && (
           <div
