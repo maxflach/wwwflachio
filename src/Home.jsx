@@ -2,13 +2,45 @@ import { useEffect, useRef, useState } from "react";
 import { Application, Sprite, Texture } from "pixi.js";
 import { CRTFilter, RGBSplitFilter } from "pixi-filters";
 import * as THREE from "three";
-import Terminal from "./Terminal";
 import { buildComputerScene, setKeyState } from "./computerModel";
+import { run as runTerminal, makePrompt, complete as completeTerminal } from "./terminalCore";
 
 // Pixi internal render-target dimensions. Higher than the game canvas so the CRT
 // filter scanlines/noise stay crisp when sampled as a texture in 3D.
 const PIXI_W = 960;
 const PIXI_H = 540;
+
+// ===== Boot sequence + boot menu =====
+const BOOT_LINES = [
+  "FlachOS BIOS v1.96   (c) 1996-2026 max flach holding",
+  "",
+  "Initializing memory ........................ 640K OK",
+  "Detecting CPU .............................. i486 DX2 @ 66MHz",
+  "Probing IDE bus:",
+  "  primary master:    FLACH-DISK-3000   30y full",
+  "  secondary master:  CD-ROM",
+  "  secondary slave:   FLOPPY  (3.5\", 1.44 MB)",
+  "",
+  "Mounting /  ................................ [ OK ]",
+  "Bringing up network:",
+  "  eth0: 10base-T link detected",
+  "  smtpd ........ :25/tcp",
+  "  imapd ........ :143/tcp",
+  "",
+  "Starting init ............................. [ OK ]",
+  "Starting flachd ........................... [ OK ]",
+  "Spawning getty on tty1 .................... [ OK ]",
+  "",
+  ">> press any key to continue",
+];
+const BOOT_LINE_MS = 110;
+const BOOT_HOLD_MS = 900;
+
+const MENU_ITEMS = [
+  { id: "game",     label: "BOOT GAME / STORY" },
+  { id: "terminal", label: "BOOT TERMINAL" },
+  { id: "reboot",   label: "REBOOT" },
+];
 
 // Render resolution. The canvas is upscaled with image-rendering: pixelated.
 const VIEW_W = 480;
@@ -80,12 +112,46 @@ const FLOPPIES_DATA = [
   {
     x: 768, y: 130, label: "STACK",
     reveal: [
-      "C  JS  TS  PY  PHP  GO",
-      "REACT  NODE  NEXT  VUE",
-      "POSTGRES  MYSQL  REDIS",
-      "DOCKER  K8S  LINUX",
-      "AWS  GCP  CLOUDFLARE",
-      "...AND WHATEVER SHIPS",
+      "[ LANGUAGES ]",
+      "  c  c++  js  ts  python  go  rust  ruby  java  kotlin",
+      "  php  perl  lua  bash  zsh  awk  sed  sql",
+      "",
+      "[ FRONTEND ]",
+      "  react  next  vue  svelte  solid  angular",
+      "  vite  webpack  esbuild  tailwind  three.js  pixi.js",
+      "",
+      "[ BACKEND ]",
+      "  node  express  fastify  nestjs  deno  bun",
+      "  django  flask  fastapi  rails  laravel  phoenix",
+      "  gin  echo  actix  grpc  graphql  rest  websockets",
+      "",
+      "[ DATA ]",
+      "  postgres  mysql  mariadb  sqlite  redis  memcached",
+      "  mongodb  cassandra  elasticsearch  clickhouse",
+      "  bigquery  snowflake  duckdb  kafka  rabbitmq  nats",
+      "",
+      "[ INFRA ]",
+      "  docker  k8s  helm  terraform  pulumi  ansible",
+      "  aws  gcp  azure  cloudflare  fastly  vercel  fly.io",
+      "  linux  nginx  caddy  haproxy  traefik",
+      "",
+      "[ OBSERVABILITY ]",
+      "  prometheus  grafana  datadog  sentry  honeycomb",
+      "  opentelemetry  elk  loki  tempo  jaeger",
+      "",
+      "[ CI / CD ]",
+      "  github actions  gitlab ci  circleci  jenkins",
+      "  buildkite  argo  flux",
+      "",
+      "[ AI / ML ]",
+      "  pytorch  tensorflow  huggingface  langchain",
+      "  openai  anthropic  claude  gemini  ollama",
+      "",
+      "[ TOOLS ]",
+      "  git  tmux  neovim  vscode  cursor  claude code",
+      "  figma  notion  linear  slack",
+      "",
+      "...and whatever ships next.",
     ].join("\n"),
   },
 ];
@@ -193,19 +259,170 @@ export default function Home() {
     crtNear: false,
     cameraX: 0,
     t: 0,
+    mode: "boot",                                        // "boot" | "menu" | "game" | "terminal"
+    boot: { elapsed: 0, lineIndex: 0, postPause: 0 },
+    menu: { selected: 0 },
+    terminal: {
+      cwd: "/",
+      input: "",
+      past: [],
+      pastIdx: -1,
+      history: [{ kind: "out", text: "FlachOS shell — type 'help'. Esc returns to menu." }],
+    },
+    reveal: null,                                        // { label, text } or null
   });
 
-  const [reveal, setReveal] = useState(null);
+  const [mode, setMode] = useState("boot");
   const [foundCount, setFoundCount] = useState(0);
-  const [crtNear, setCrtNear] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [reveal, setReveal] = useState(null);
+  const foundCountRef = useRef(0);
+  useEffect(() => { foundCountRef.current = foundCount; }, [foundCount]);
+
+  // The DOM overlay that takes over the screen on disk pickup is positioned to
+  // exactly cover the 3D monitor's screen plane; this ref points at the DOM div.
+  const screenOverlayRef = useRef(null);
+
+  function fireReveal(data) {
+    stateRef.current.reveal = data;
+    setReveal(data);
+  }
+  function clearReveal() {
+    stateRef.current.reveal = null;
+    setReveal(null);
+  }
+
+  function switchMode(next) {
+    stateRef.current.mode = next;
+    if (next === "boot") {
+      stateRef.current.boot = { elapsed: 0, lineIndex: 0, postPause: 0 };
+    }
+    setMode(next);
+  }
 
   // Input
   useEffect(() => {
     const s = stateRef.current;
     function down(e) {
       const k = e.key;
-      if (terminalOpen) return;
+
+      // ----- Boot screen: any key skips ahead to the menu -----
+      if (s.mode === "boot") {
+        e.preventDefault();
+        if (s.boot.lineIndex < BOOT_LINES.length) {
+          s.boot.lineIndex = BOOT_LINES.length;
+          s.boot.elapsed = BOOT_LINES.length * BOOT_LINE_MS;
+        } else {
+          switchMode("menu");
+        }
+        return;
+      }
+
+      // ----- Boot menu: ArrowUp/Down navigate, Enter selects -----
+      if (s.mode === "menu") {
+        if (k === "ArrowUp") {
+          e.preventDefault();
+          s.menu.selected = (s.menu.selected - 1 + MENU_ITEMS.length) % MENU_ITEMS.length;
+        } else if (k === "ArrowDown") {
+          e.preventDefault();
+          s.menu.selected = (s.menu.selected + 1) % MENU_ITEMS.length;
+        } else if (k === "Enter") {
+          e.preventDefault();
+          const item = MENU_ITEMS[s.menu.selected];
+          if (item.id === "game") switchMode("game");
+          else if (item.id === "terminal") switchMode("terminal");
+          else if (item.id === "reboot") switchMode("boot");
+        }
+        return;
+      }
+
+      // ----- Terminal: capture all typing -----
+      if (s.mode === "terminal") {
+        const term = s.terminal;
+        if (k === "Escape") {
+          e.preventDefault();
+          switchMode("menu");
+          return;
+        }
+        if (k === "Enter") {
+          e.preventDefault();
+          const result = runTerminal(term.input, term.cwd);
+          if (result.kind === "exit") {
+            switchMode("menu");
+            return;
+          }
+          if (result.kind === "clear") {
+            term.history = [];
+          } else if (result.kind === "cd") {
+            term.history.push({ kind: "in", text: term.input, prompt: makePrompt(term.cwd) });
+            term.cwd = result.cwd;
+          } else {
+            term.history.push({ kind: "in", text: term.input, prompt: makePrompt(term.cwd) });
+            if (result.text) term.history.push({ kind: "out", text: result.text });
+          }
+          if (term.input.trim()) term.past.unshift(term.input);
+          term.pastIdx = -1;
+          term.input = "";
+          return;
+        }
+        if (k === "Backspace") {
+          e.preventDefault();
+          term.input = term.input.slice(0, -1);
+          return;
+        }
+        if (k === "Tab") {
+          e.preventDefault();
+          const r = completeTerminal(term.input, term.cwd);
+          if (r.kind === "complete") {
+            term.input = r.input;
+          } else if (r.kind === "options") {
+            // Echo the candidates above the prompt without consuming input
+            term.history.push({
+              kind: "in",
+              text: term.input,
+              prompt: makePrompt(term.cwd),
+            });
+            term.history.push({ kind: "out", text: r.matches.join("  ") });
+          }
+          return;
+        }
+        if (k === "ArrowUp") {
+          e.preventDefault();
+          const n = Math.min(term.pastIdx + 1, term.past.length - 1);
+          if (n >= 0 && term.past[n] !== undefined) {
+            term.pastIdx = n;
+            term.input = term.past[n];
+          }
+          return;
+        }
+        if (k === "ArrowDown") {
+          e.preventDefault();
+          const n = term.pastIdx - 1;
+          if (n < 0) { term.pastIdx = -1; term.input = ""; }
+          else { term.pastIdx = n; term.input = term.past[n]; }
+          return;
+        }
+        if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          term.input += k;
+          return;
+        }
+        return;
+      }
+
+      // ----- Game mode -----
+      if (s.reveal) {
+        // Reveal modal is up — Esc closes it; everything else is blocked
+        if (k === "Escape") {
+          e.preventDefault();
+          clearReveal();
+        }
+        return;
+      }
+      if (k === "Escape") {
+        e.preventDefault();
+        switchMode("menu");
+        return;
+      }
       if (k === "ArrowLeft" || k === "a" || k === "A") s.keys.left = true;
       else if (k === "ArrowRight" || k === "d" || k === "D") s.keys.right = true;
       else if (k === "w" || k === "W" || k === " ") {
@@ -215,7 +432,7 @@ export default function Home() {
       } else if (k === "ArrowDown" || k === "s" || k === "S") {
         if (s.crtNear) {
           e.preventDefault();
-          setTerminalOpen(true);
+          switchMode("terminal");
         }
       }
     }
@@ -231,9 +448,9 @@ export default function Home() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [terminalOpen]);
+  }, []);
 
-  // Game loop
+  // Game loop — always running; update() branches on stateRef.current.mode
   useEffect(() => {
     const ctx = canvasRef.current.getContext("2d");
     ctx.imageSmoothingEnabled = false;
@@ -242,17 +459,38 @@ export default function Home() {
     function loop(now) {
       const dt = Math.min(2, (now - last) / 16.67);
       last = now;
-      if (!terminalOpen) update(dt);
+      update(dt);
       draw(ctx);
       raf = requestAnimationFrame(loop);
     }
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [terminalOpen]);
+  }, []);
 
   function update(dt) {
     const s = stateRef.current;
     s.t += dt;
+
+    // Boot animation only advances during boot mode.
+    // NOTE: dt is in frame-units (1 = one 60fps frame, ~16.67ms), not seconds.
+    if (s.mode === "boot") {
+      const dtMs = dt * 16.67;
+      s.boot.elapsed += dtMs;
+      s.boot.lineIndex = Math.min(
+        BOOT_LINES.length,
+        Math.floor(s.boot.elapsed / BOOT_LINE_MS)
+      );
+      if (s.boot.lineIndex >= BOOT_LINES.length) {
+        s.boot.postPause += dtMs;
+        if (s.boot.postPause > BOOT_HOLD_MS) switchMode("menu");
+      }
+      return;
+    }
+
+    // Menu mode: nothing to advance — just sit and wait for input.
+    if (s.mode === "menu") return;
+
+    // ----- Game mode (existing physics) -----
     const p = s.player;
 
     if (s.keys.left) { p.vx = -MOVE_SPEED; p.facing = -1; }
@@ -316,31 +554,21 @@ export default function Home() {
           f.hit = true;
           f.bump = 6;
           p.vy = Math.max(p.vy, 0.5);
-          setReveal({ label: f.label, text: f.reveal });
+          fireReveal({ label: f.label, text: f.reveal });
           setFoundCount((c) => c + 1);
         }
       }
     }
 
-    // CRT proximity
-    const crt = SOLIDS.find((s) => s.type === "crt");
-    const near = rectsOverlap(p, { x: crt.x - 6, y: crt.y - 6, w: crt.w + 12, h: crt.h + 12 });
-    if (near !== s.crtNear) {
-      s.crtNear = near;
-      setCrtNear(near);
-    }
+    // CRT proximity (canvas-rendered hint reads s.crtNear directly)
+    const crt = SOLIDS.find((sol) => sol.type === "crt");
+    s.crtNear = rectsOverlap(p, { x: crt.x - 6, y: crt.y - 6, w: crt.w + 12, h: crt.h + 12 });
 
     // Camera follows player
     const target = p.x + p.w / 2 - VIEW_W / 2;
     s.cameraX += (target - s.cameraX) * Math.min(1, 0.18 * dt);
     s.cameraX = Math.max(0, Math.min(WORLD_W - VIEW_W, s.cameraX));
   }
-
-  useEffect(() => {
-    if (!reveal) return;
-    const id = setTimeout(() => setReveal(null), 3500);
-    return () => clearTimeout(id);
-  }, [reveal]);
 
   // Render pipeline:
   //   2D game canvas (off-DOM)                 ← drawn by the game loop
@@ -453,6 +681,12 @@ export default function Home() {
       };
       window.addEventListener("resize", onResize);
 
+      // Reused scratch vectors for the per-frame screen projection
+      const projCorners = [
+        new THREE.Vector3(), new THREE.Vector3(),
+        new THREE.Vector3(), new THREE.Vector3(),
+      ];
+
       let last = performance.now();
       const loop = (now) => {
         const dt = (now - last) / 1000;
@@ -465,6 +699,34 @@ export default function Home() {
 
         if (sceneRef.current) sceneRef.current.update(dt);
         renderer.render(scene, camera);
+
+        // Project the 4 corners of the 3D screen plane to screen-space and
+        // position the DOM overlay (used for the disk-reveal modal) over it.
+        if (sceneRef.current?.screenMesh && screenOverlayRef.current) {
+          const sm = sceneRef.current.screenMesh;
+          const halfW = sceneRef.current.screenW / 2;
+          const halfH = sceneRef.current.screenH / 2;
+          projCorners[0].set(-halfW, -halfH, 0);
+          projCorners[1].set( halfW, -halfH, 0);
+          projCorners[2].set( halfW,  halfH, 0);
+          projCorners[3].set(-halfW,  halfH, 0);
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const c of projCorners) {
+            c.applyMatrix4(sm.matrixWorld).project(camera);
+            const sx = (c.x * 0.5 + 0.5) * host.clientWidth;
+            const sy = (-c.y * 0.5 + 0.5) * host.clientHeight;
+            if (sx < minX) minX = sx;
+            if (sy < minY) minY = sy;
+            if (sx > maxX) maxX = sx;
+            if (sy > maxY) maxY = sy;
+          }
+          const el = screenOverlayRef.current;
+          el.style.left = `${minX}px`;
+          el.style.top = `${minY}px`;
+          el.style.width = `${maxX - minX}px`;
+          el.style.height = `${maxY - minY}px`;
+        }
+
         raf = requestAnimationFrame(loop);
       };
       raf = requestAnimationFrame(loop);
@@ -542,6 +804,11 @@ export default function Home() {
 
   function draw(ctx) {
     const s = stateRef.current;
+
+    if (s.mode === "boot")     { drawBoot(ctx, s); return; }
+    if (s.mode === "menu")     { drawMenu(ctx, s); return; }
+    if (s.mode === "terminal") { drawTerminal(ctx, s); return; }
+
     const cam = Math.round(s.cameraX);
 
     // Sky / motherboard backdrop
@@ -608,7 +875,10 @@ export default function Home() {
     drawPlayer(ctx, s.player);
 
     ctx.restore();
-    // Scanlines + vignette + noise are added by the Pixi CRT filter post-process.
+
+    // Game-mode overlays (HUD, hints, reveal card, all-disks badge) — all in
+    // canvas so they render on the in-monitor screen.
+    drawGameOverlay(ctx, s, foundCountRef.current);
   }
 
   return (
@@ -619,67 +889,65 @@ export default function Home() {
       {/* Three.js canvas mounts here — renders the 3D 486 with the live screen */}
       <div ref={threeHostRef} className="absolute inset-0" />
 
-      <Hud foundCount={foundCount} total={FLOPPIES_DATA.length} />
+      {/* DOM overlay positioned to exactly cover the 3D monitor's screen plane.
+          Hidden visually unless `reveal` is set. Always present in the DOM so
+          the render loop can keep its position in sync with the camera. */}
+      <div
+        ref={screenOverlayRef}
+        className="absolute pointer-events-none"
+        style={{ left: 0, top: 0, width: 0, height: 0, zIndex: 50 }}
+      >
+        {reveal && (
+          <div
+            className="w-full h-full bg-[#020210] text-[#C0E0FF] flex flex-col pointer-events-auto"
+            style={{
+              fontFamily: "'Press Start 2P', monospace",
+              boxShadow: "inset 0 0 60px rgba(0,0,0,0.7)",
+            }}
+          >
+            {/* Title bar */}
+            <div className="flex items-center justify-between px-3 py-2 border-b border-[#9CC8FC]/40">
+              <span className="text-[10px] text-[#FFD030] tracking-widest">
+                ▸ {reveal.label}
+              </span>
+              <button
+                onClick={clearReveal}
+                className="text-[10px] text-[#FFD030] hover:text-white px-2 py-1 leading-none"
+                style={{ fontFamily: "'Press Start 2P', monospace" }}
+                aria-label="Close"
+              >
+                [ X ]
+              </button>
+            </div>
 
-      {crtNear && !terminalOpen && (
-        <div
-          className="absolute z-20 left-1/2 -translate-x-1/2 text-[#FFD030] text-[10px] md:text-xs animate-bounce"
-          style={{ bottom: "10%", textShadow: "2px 2px 0 #000" }}
-        >
-          ↓ TO BOOT
-        </div>
-      )}
+            {/* Body — linkified content, fills full width of the screen */}
+            <div
+              className="flex-1 overflow-auto px-3 py-2 leading-snug terminal-scroll"
+              style={{ fontSize: "clamp(7px, 0.95vw, 12px)" }}
+            >
+              {reveal.text.split("\n").map((line, i) => (
+                <div
+                  key={i}
+                  className="whitespace-pre-wrap break-words"
+                  style={{ fontFamily: "'Press Start 2P', monospace" }}
+                >
+                  {linkifyLine(line)}
+                </div>
+              ))}
+            </div>
 
-      {reveal && (
-        <div
-          className="absolute z-30 top-[28%] left-1/2 -translate-x-1/2 bg-[#F5F5DC] text-[#181818] px-5 py-3 text-center"
-          style={{
-            border: "4px solid #181818",
-            boxShadow: "6px 6px 0 #181818",
-            fontFamily: "'Press Start 2P', monospace",
-          }}
-        >
-          <div className="text-[8px] text-[#888] mb-2 tracking-wider">▸ {reveal.label}</div>
-          <pre className="text-[9px] md:text-[11px] whitespace-pre leading-relaxed" style={{ fontFamily: "'Press Start 2P', monospace" }}>
-            {reveal.text}
-          </pre>
-        </div>
-      )}
+            {/* Footer hint */}
+            <div className="px-3 py-2 text-[8px] text-[#666] tracking-widest border-t border-[#9CC8FC]/20 text-center">
+              ESC OR [ X ] TO CLOSE
+            </div>
+          </div>
+        )}
+      </div>
 
-      {foundCount === FLOPPIES_DATA.length && (
-        <div
-          className="absolute z-20 bottom-3 left-1/2 -translate-x-1/2 text-[#FFD030] text-[10px] md:text-xs"
-          style={{ textShadow: "2px 2px 0 #000" }}
-        >
-          ★ ALL DISKS RECOVERED ★
-        </div>
-      )}
-
-      {terminalOpen && <Terminal onClose={() => setTerminalOpen(false)} />}
     </div>
   );
 }
 
-function Hud({ foundCount, total }) {
-  return (
-    <>
-      <div
-        className="absolute top-3 left-3 z-20 text-[#F5F5DC] text-[9px] md:text-xs"
-        style={{ textShadow: "2px 2px 0 #000" }}
-      >
-        DISKS {foundCount}/{total}
-      </div>
-      <div
-        className="absolute top-3 right-3 z-20 text-[#F5F5DC] text-[9px] md:text-xs text-right leading-relaxed"
-        style={{ textShadow: "2px 2px 0 #000" }}
-      >
-        <div>← → MOVE</div>
-        <div>SPACE JUMP</div>
-        <div>↓ AT CRT</div>
-      </div>
-    </>
-  );
-}
 
 // ===== TRACES =====
 function drawTraces(ctx, t) {
@@ -900,6 +1168,245 @@ function drawCrt(ctx, s, t) {
 }
 
 // ===== PROPS =====
+// ===== BOOT + MENU =====
+function drawBoot(ctx, s) {
+  // BIOS-blue text on black, classic mid-90s POST screen
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  ctx.font = "8px 'Press Start 2P', monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#9CC8FC";
+
+  const startX = 8;
+  const startY = 8;
+  const lineH = 12;
+  const shown = s.boot.lineIndex;
+
+  for (let i = 0; i < shown; i++) {
+    ctx.fillText(BOOT_LINES[i], startX, startY + i * lineH);
+  }
+
+  // Blinking cursor at the end of the most-recent line (or below the last one)
+  const cursorOn = ((s.t * 1000 + s.boot.elapsed) % 600) < 300;
+  if (cursorOn) {
+    const lastIdx = Math.max(0, shown - 1);
+    const lastText = BOOT_LINES[Math.min(shown, BOOT_LINES.length - 1)] || "";
+    const cursorX = startX + (shown < BOOT_LINES.length ? ctx.measureText(lastText).width : 0);
+    const cursorY = startY + (shown < BOOT_LINES.length ? lastIdx : BOOT_LINES.length - 1) * lineH;
+    ctx.fillRect(
+      shown < BOOT_LINES.length ? cursorX : startX + ctx.measureText(BOOT_LINES[BOOT_LINES.length - 1]).width + 2,
+      cursorY,
+      6,
+      8
+    );
+  }
+}
+
+function drawMenu(ctx, s) {
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+
+  // Title
+  ctx.font = "16px 'Press Start 2P', monospace";
+  ctx.fillStyle = "#FFD030";
+  ctx.fillText("FlachOS", VIEW_W / 2, 30);
+  ctx.font = "8px 'Press Start 2P', monospace";
+  ctx.fillStyle = "#9CC8FC";
+  ctx.fillText("BOOT MENU", VIEW_W / 2, 56);
+
+  // Decorative box
+  ctx.strokeStyle = "#9CC8FC";
+  ctx.lineWidth = 1;
+  const boxX = 80, boxY = 84, boxW = VIEW_W - 160, boxH = 130;
+  ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW, boxH);
+
+  // Items
+  ctx.textAlign = "left";
+  ctx.font = "8px 'Press Start 2P', monospace";
+  const itemX = boxX + 22;
+  const itemY = boxY + 22;
+  const lineH = 18;
+  MENU_ITEMS.forEach((item, i) => {
+    const y = itemY + i * lineH;
+    const selected = s.menu.selected === i;
+    if (selected) {
+      const blink = ((s.t * 1000) % 600) < 300;
+      ctx.fillStyle = "#FFD030";
+      if (blink) ctx.fillText(">", itemX - 14, y);
+      ctx.fillText(item.label, itemX, y);
+    } else {
+      ctx.fillStyle = "#9CC8FC";
+      ctx.fillText(item.label, itemX, y);
+    }
+  });
+
+  // Hint
+  ctx.fillStyle = "#666666";
+  ctx.textAlign = "center";
+  ctx.fillText("UP / DOWN  -  ENTER", VIEW_W / 2, boxY + boxH + 14);
+
+  // Footer brand
+  ctx.fillStyle = "#444444";
+  ctx.fillText("FLACH-IO  REV  1.0", VIEW_W / 2, VIEW_H - 16);
+}
+
+// Game-mode overlays drawn on the same 2D canvas as the game world.
+function drawGameOverlay(ctx, s, foundCount) {
+  ctx.font = "8px 'Press Start 2P', monospace";
+  ctx.textBaseline = "top";
+
+  // ----- DISKS x/N (top-left) -----
+  const disksText = `DISKS ${foundCount}/${s.floppies.length}`;
+  ctx.textAlign = "left";
+  textWithShadow(ctx, disksText, 6, 6, "#F5F5DC");
+
+  // ----- Controls (top-right) -----
+  ctx.textAlign = "right";
+  const controls = [
+    "LEFT/RIGHT  MOVE",
+    "SPACE       JUMP",
+    "DOWN AT CRT",
+    "ESC         MENU",
+  ];
+  controls.forEach((line, i) => {
+    textWithShadow(ctx, line, VIEW_W - 6, 6 + i * 10, "#F5F5DC");
+  });
+
+  // ----- ↓ TO BOOT (when near CRT) -----
+  if (s.crtNear) {
+    ctx.textAlign = "center";
+    const blink = ((s.t * 1000) % 700) < 350;
+    if (blink) textWithShadow(ctx, "DOWN  TO  BOOT", VIEW_W / 2, VIEW_H - 30, "#FFD030");
+  }
+
+  // ----- ALL DISKS RECOVERED (full set) -----
+  if (foundCount === s.floppies.length) {
+    ctx.textAlign = "center";
+    textWithShadow(ctx, "* ALL DISKS RECOVERED *", VIEW_W / 2, VIEW_H - 14, "#FFD030");
+  }
+}
+
+function textWithShadow(ctx, text, x, y, fill) {
+  ctx.fillStyle = "#000";
+  ctx.fillText(text, x + 1, y + 1);
+  ctx.fillStyle = fill;
+  ctx.fillText(text, x, y);
+}
+
+// Wrap email/URL substrings in clickable <a>. Non-matching text stays plain.
+function linkifyLine(line) {
+  const pattern = /([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})|((?:https?:\/\/|www\.)[^\s]+)|(linkedin\.com\/[^\s]+)|(github\.com\/[^\s]+)|(\/in\/[A-Za-z0-9._-]+)/gi;
+  const matches = [...line.matchAll(pattern)];
+  if (!matches.length) return [line];
+
+  const out = [];
+  let lastIdx = 0, key = 0;
+  for (const m of matches) {
+    const start = m.index;
+    if (start > lastIdx) out.push(line.slice(lastIdx, start));
+    const matched = m[0];
+    let href = matched;
+    if (m[1]) href = `mailto:${matched}`;
+    else if (matched.startsWith("www.")) href = `https://${matched}`;
+    else if (matched.startsWith("/in/")) href = `https://linkedin.com${matched}`;
+    else if (matched.startsWith("linkedin.com")) href = `https://${matched}`;
+    else if (matched.startsWith("github.com")) href = `https://${matched}`;
+    out.push(
+      <a
+        key={`l${key++}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-[#FFD030] underline hover:text-white"
+      >
+        {matched}
+      </a>
+    );
+    lastIdx = start + matched.length;
+  }
+  if (lastIdx < line.length) out.push(line.slice(lastIdx));
+  return out;
+}
+
+function drawTerminal(ctx, s) {
+  const { terminal, t } = s;
+  // Background
+  ctx.fillStyle = "#020210";
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  ctx.font = "8px 'Press Start 2P', monospace";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+
+  const margin = 6;
+  const lineH = 11;
+  const charW = ctx.measureText("M").width || 7;
+  const maxCols = Math.floor((VIEW_W - margin * 2) / charW);
+  const promptLineY = VIEW_H - margin - lineH;
+  const visibleHistoryLines = Math.floor((promptLineY - margin) / lineH);
+
+  // Flatten history into wrapped lines
+  const lines = [];
+  for (const h of terminal.history) {
+    if (h.kind === "in") {
+      const text = (h.prompt || "") + h.text;
+      const wrapped = wrapForTerminal(text, maxCols);
+      for (const w of wrapped) lines.push({ kind: "in", text: w });
+    } else {
+      for (const raw of h.text.split("\n")) {
+        const wrapped = wrapForTerminal(raw, maxCols);
+        if (wrapped.length === 0) lines.push({ kind: "out", text: "" });
+        else for (const w of wrapped) lines.push({ kind: "out", text: w });
+      }
+    }
+  }
+
+  const start = Math.max(0, lines.length - visibleHistoryLines);
+  let y = margin;
+  for (let i = start; i < lines.length; i++) {
+    const ln = lines[i];
+    ctx.fillStyle = ln.kind === "in" ? "#9CC8FC" : "#C0E0FF";
+    ctx.fillText(ln.text, margin, y);
+    y += lineH;
+  }
+
+  // Prompt + input on the bottom row
+  const prompt = makePrompt(terminal.cwd);
+  ctx.fillStyle = "#30FF60";
+  ctx.fillText(prompt, margin, promptLineY);
+  ctx.fillStyle = "#FCFCFC";
+  const promptWidth = ctx.measureText(prompt).width;
+  // Truncate input from the left if it would overflow
+  const availChars = Math.max(8, maxCols - prompt.length - 1);
+  let displayInput = terminal.input;
+  if (displayInput.length > availChars) {
+    displayInput = "…" + displayInput.slice(-(availChars - 1));
+  }
+  ctx.fillText(displayInput, margin + promptWidth, promptLineY);
+
+  // Blinking caret
+  const blink = ((t * 16.67) % 600) < 300;
+  if (blink) {
+    const caretX = margin + promptWidth + ctx.measureText(displayInput).width + 1;
+    ctx.fillStyle = "#FCFCFC";
+    ctx.fillRect(caretX, promptLineY, 5, 8);
+  }
+}
+
+function wrapForTerminal(text, maxCols) {
+  if (!text) return [""];
+  const out = [];
+  for (let i = 0; i < text.length; i += maxCols) {
+    out.push(text.slice(i, i + maxCols));
+  }
+  return out;
+}
+
 function drawProp(ctx, p) {
   switch (p.type) {
     case "resistor": {

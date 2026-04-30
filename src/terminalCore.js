@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+// Pure VFS + command runner for the in-monitor shell.
+// Imported by Home.jsx (canvas-rendered terminal mode).
 
-// ===== Virtual filesystem =====
 const ABOUT = [
   "max flach",
   "founder / cto / entrepreneur — stockholm, sweden",
@@ -53,13 +53,12 @@ const VENTURES = [
   "tip: cd projects/ then ls",
 ].join("\n");
 
-const FS = {
+export const FS = {
   "/": { dir: true, entries: ["about.txt", "contact.txt", "ventures.txt", "projects/", "secrets.txt"] },
   "/about.txt":     { content: ABOUT },
   "/contact.txt":   { content: CONTACT },
   "/ventures.txt":  { content: VENTURES },
   "/secrets.txt":   { content: "permission denied. nice try." },
-
   "/projects": {
     dir: true,
     entries: [
@@ -83,12 +82,10 @@ const FS = {
   "/projects/qulit.txt":            { content: "Qulit — Founder + CTO\nDec 1998 — May 2003 (~4 yrs 6 mos)\nStockholm" },
 };
 
-function resolve(cwd, arg) {
+export function resolve(cwd, arg) {
   if (!arg) return cwd;
-  // ~ shorthand for home (root in this VFS)
   if (arg === "~" || arg === "~/") return "/";
   if (arg.startsWith("~/")) arg = arg.slice(1);
-
   const base = arg.startsWith("/") ? "/" : cwd;
   const combined = (base === "/" ? "" : base) + "/" + arg;
   const parts = [];
@@ -100,15 +97,97 @@ function resolve(cwd, arg) {
   return "/" + parts.join("/");
 }
 
-function lookup(path) {
-  // Accept trailing slashes
+export function lookup(path) {
   const stripped = path.endsWith("/") && path.length > 1 ? path.slice(0, -1) : path;
   return FS[stripped] || FS[path];
 }
 
-function shortCwd(cwd) {
+export function shortCwd(cwd) {
   if (cwd === "/") return "~";
   return "~" + cwd;
+}
+
+export function makePrompt(cwd) {
+  return `guest@flach.io:${shortCwd(cwd)}$ `;
+}
+
+const COMMANDS = [
+  "help", "whoami", "about", "ventures", "contact",
+  "ls", "cd", "pwd", "cat", "date", "echo", "clear", "exit",
+];
+
+// Find common prefix of an array of strings.
+function commonPrefix(strs) {
+  if (!strs.length) return "";
+  let prefix = strs[0];
+  for (let i = 1; i < strs.length; i++) {
+    while (!strs[i].startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+      if (!prefix) return "";
+    }
+  }
+  return prefix;
+}
+
+// Tab-completion. Given current input + cwd, returns either:
+//   { kind: "complete", input }  — replace input with this (single match or common prefix)
+//   { kind: "options", matches } — multiple candidates, render them above the prompt
+//   { kind: "none" }             — nothing to do
+export function complete(input, cwd) {
+  const trimmed = input;
+  const parts = trimmed.split(/\s+/);
+
+  // Completing the command name (first token, no spaces yet)
+  if (parts.length <= 1 && !trimmed.includes(" ")) {
+    const prefix = trimmed;
+    const matches = COMMANDS.filter((c) => c.startsWith(prefix));
+    if (matches.length === 0) return { kind: "none" };
+    if (matches.length === 1) return { kind: "complete", input: matches[0] + " " };
+    const cp = commonPrefix(matches);
+    if (cp.length > prefix.length) return { kind: "complete", input: cp };
+    return { kind: "options", matches };
+  }
+
+  // Completing a path argument
+  const cmd = parts[0];
+  const argRaw = parts[parts.length - 1] || "";
+  // Resolve directory portion + leaf portion of the partial path
+  const lastSlash = argRaw.lastIndexOf("/");
+  const dirPart = lastSlash >= 0 ? argRaw.slice(0, lastSlash + 1) : "";
+  const leafPart = lastSlash >= 0 ? argRaw.slice(lastSlash + 1) : argRaw;
+  const dirAbs = dirPart ? resolve(cwd, dirPart) : cwd;
+  const dirNode = lookup(dirAbs);
+  if (!dirNode || !dirNode.dir) return { kind: "none" };
+
+  const candidates = dirNode.entries.filter((e) => e.startsWith(leafPart));
+  if (candidates.length === 0) return { kind: "none" };
+
+  // For `cd`, only directories make sense
+  const filtered = cmd === "cd"
+    ? candidates.filter((e) => e.endsWith("/"))
+    : candidates;
+  const set = filtered.length ? filtered : candidates;
+
+  if (set.length === 1) {
+    const completed = dirPart + set[0];
+    const head = parts.slice(0, -1).join(" ");
+    const next = head ? `${head} ${completed}` : completed;
+    // If the completion lands on a directory, leave the trailing slash; otherwise add a space.
+    return {
+      kind: "complete",
+      input: set[0].endsWith("/") ? next : next + " ",
+    };
+  }
+
+  const cp = commonPrefix(set);
+  if (cp.length > leafPart.length) {
+    const completed = dirPart + cp;
+    const head = parts.slice(0, -1).join(" ");
+    const next = head ? `${head} ${completed}` : completed;
+    return { kind: "complete", input: next };
+  }
+
+  return { kind: "options", matches: set };
 }
 
 const HELP = [
@@ -129,7 +208,7 @@ const HELP = [
   "  exit              close terminal (or press Esc)",
 ].join("\n");
 
-function run(cmd, cwd) {
+export function run(cmd, cwd) {
   const trimmed = cmd.trim();
   if (!trimmed) return { kind: "out", text: "" };
   const [name, ...rest] = trimmed.split(/\s+/);
@@ -141,9 +220,7 @@ function run(cmd, cwd) {
     case "about":    return { kind: "out", text: ABOUT };
     case "ventures": return { kind: "out", text: VENTURES };
     case "contact":  return { kind: "out", text: CONTACT };
-
     case "pwd":      return { kind: "out", text: cwd };
-
     case "ls": {
       const target = arg ? resolve(cwd, arg) : cwd;
       const node = lookup(target);
@@ -151,7 +228,6 @@ function run(cmd, cwd) {
       if (!node.dir) return { kind: "out", text: target.replace(/^\//, "") };
       return { kind: "out", text: node.entries.join("  ") };
     }
-
     case "cd": {
       const target = !arg || arg === "~" ? "/" : resolve(cwd, arg);
       const node = lookup(target);
@@ -159,7 +235,6 @@ function run(cmd, cwd) {
       if (!node.dir) return { kind: "out", text: `cd: ${arg}: not a directory` };
       return { kind: "cd", cwd: target };
     }
-
     case "cat": {
       if (!arg) return { kind: "out", text: "cat: missing file" };
       const target = resolve(cwd, arg);
@@ -168,112 +243,12 @@ function run(cmd, cwd) {
       if (node.dir) return { kind: "out", text: `cat: ${arg}: is a directory` };
       return { kind: "out", text: node.content };
     }
-
     case "date":  return { kind: "out", text: new Date().toString() };
     case "echo":  return { kind: "out", text: arg };
     case "sudo":  return { kind: "out", text: `${name}: ${arg || "<nothing>"}: permission denied. you are not in the sudoers file. this incident will be reported.` };
     case "rm":    return { kind: "out", text: "rm: nice try." };
     case "exit":  return { kind: "exit" };
     case "clear": return { kind: "clear" };
-
     default:      return { kind: "out", text: `${name}: command not found. type 'help'.` };
   }
-}
-
-// ===== Component =====
-export default function Terminal({ onClose }) {
-  const [history, setHistory] = useState([
-    { kind: "out", text: "flach.io shell — type 'help'. Esc to close." },
-  ]);
-  const [input, setInput] = useState("");
-  const [past, setPast] = useState([]);
-  const [pastIdx, setPastIdx] = useState(-1);
-  const [cwd, setCwd] = useState("/");
-  const inputRef = useRef(null);
-  const scrollRef = useRef(null);
-
-  const prompt = `guest@flach.io:${shortCwd(cwd)}$ `;
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-  useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [history]);
-
-  function submit(e) {
-    e.preventDefault();
-    const result = run(input, cwd);
-    if (result.kind === "exit") { onClose(); return; }
-    if (result.kind === "clear") {
-      setHistory([]);
-    } else if (result.kind === "cd") {
-      setCwd(result.cwd);
-      setHistory((h) => [...h, { kind: "in", text: input, prompt }]);
-    } else {
-      setHistory((h) => [
-        ...h,
-        { kind: "in", text: input, prompt },
-        ...(result.text ? [{ kind: "out", text: result.text }] : []),
-      ]);
-    }
-    if (input.trim()) setPast((p) => [input, ...p]);
-    setPastIdx(-1);
-    setInput("");
-  }
-
-  function onKeyDown(e) {
-    if (e.key === "Escape") { onClose(); return; }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      const next = Math.min(pastIdx + 1, past.length - 1);
-      if (next >= 0 && past[next] !== undefined) { setPastIdx(next); setInput(past[next]); }
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const next = pastIdx - 1;
-      if (next < 0) { setPastIdx(-1); setInput(""); }
-      else { setPastIdx(next); setInput(past[next]); }
-    }
-  }
-
-  return (
-    <div
-      className="absolute inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-2xl h-[60vh] bg-slate-950/95 border border-slate-700 rounded-md shadow-2xl flex flex-col font-mono text-sm text-slate-200"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800">
-          <span className="w-3 h-3 rounded-full bg-red-500" />
-          <span className="w-3 h-3 rounded-full bg-yellow-500" />
-          <span className="w-3 h-3 rounded-full bg-green-500" />
-          <span className="ml-2 text-slate-500 text-xs">guest@flach.io — sh</span>
-        </div>
-        <div ref={scrollRef} className="flex-1 overflow-auto p-3 whitespace-pre-wrap leading-snug terminal-scroll">
-          {history.map((h, i) =>
-            h.kind === "in" ? (
-              <div key={i}>
-                <span className="text-emerald-400">{h.prompt}</span>
-                <span>{h.text}</span>
-              </div>
-            ) : (
-              <div key={i} className="text-slate-300">{h.text}</div>
-            )
-          )}
-          <form onSubmit={submit} className="flex">
-            <span className="text-emerald-400 whitespace-pre">{prompt}</span>
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={onKeyDown}
-              className="flex-1 bg-transparent outline-none text-slate-100 caret-emerald-400"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </form>
-        </div>
-      </div>
-    </div>
-  );
 }

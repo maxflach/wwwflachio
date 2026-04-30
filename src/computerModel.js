@@ -291,8 +291,8 @@ function buildMainBlock(keyMap) {
   return group;
 }
 
-// Tiny canvas texture for the "IBM" badge stamped on the chassis
-function makeIBMLogoTexture() {
+// IBM-Model-M-style striped-letters badge — but it says MAX
+function makeMaxLogoTexture() {
   const c = document.createElement("canvas");
   c.width = 256;
   c.height = 64;
@@ -300,17 +300,17 @@ function makeIBMLogoTexture() {
   // Background matches the upper console plastic
   ctx.fillStyle = "#E8D89A";
   ctx.fillRect(0, 0, c.width, c.height);
-  // The famous IBM striped letters
+  // Letters
   ctx.fillStyle = "#1A1A1A";
   ctx.font = "900 44px Helvetica, Arial, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("IBM", c.width / 2, c.height / 2 + 2);
-  // Five horizontal stripes through the letters (logo trademark)
+  ctx.fillText("MAX", c.width / 2, c.height / 2 + 2);
+  // Eight horizontal stripes punched through the letters (the IBM logo trick)
   ctx.fillStyle = "#E8D89A";
-  for (let i = 0; i < 5; i++) {
-    const y = 18 + i * 6;
-    ctx.fillRect(60, y, 136, 2);
+  for (let i = 0; i < 8; i++) {
+    const y = 18 + i * 4;
+    ctx.fillRect(50, y, 156, 2);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -482,7 +482,7 @@ function buildMonitor(materials, pixiCanvas) {
   monPwr.position.set(W / 2 - 0.34, H * 0.13, D / 2 + 0.026);
   group.add(monPwr);
 
-  return { group, screenTexture, height: H, width: W, depth: D };
+  return { group, screenTexture, screenMesh: screen, screenW, screenH, height: H, width: W, depth: D };
 }
 
 function buildSpeaker() {
@@ -628,15 +628,17 @@ export function buildComputerScene(pixiCanvas) {
   kb.add(arrows);
   kb.add(numpad);
 
-  // ----- IBM badge (back-right of the console, between F-row and rear edge) -----
+  // ----- MAX badge (upper-left of the console — same spot a real Model M
+  //       has the "IBM" plate, on the back strip behind the function row) -----
   const ibmZ = -(numRows / 2) * STRIDE - backStripD * 0.5;
-  const ibmPlate = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.55, 0.13),
-    new THREE.MeshBasicMaterial({ map: makeIBMLogoTexture(), toneMapped: false })
+  const maxPlate = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.45, 0.11),
+    new THREE.MeshBasicMaterial({ map: makeMaxLogoTexture(), toneMapped: false })
   );
-  ibmPlate.rotation.x = -Math.PI / 2;
-  ibmPlate.position.set(numpadStartX + 1.0, surfaceY + 0.001, ibmZ);
-  kb.add(ibmPlate);
+  maxPlate.rotation.x = -Math.PI / 2;
+  // Positioned above the F-row keys, near the left edge of the console
+  maxPlate.position.set(-mainWidth / 2 + 0.32, surfaceY + 0.001, ibmZ);
+  kb.add(maxPlate);
 
   // ----- Three lock-state LEDs above the numpad (Caps / Num / Scroll) -----
   const ledMatGreen = new THREE.MeshBasicMaterial({ color: PALETTE.ledGreen });
@@ -703,6 +705,9 @@ export function buildComputerScene(pixiCanvas) {
   return {
     object3D: root,
     screenTexture: monitorObj.screenTexture,
+    screenMesh: monitorObj.screenMesh,
+    screenW: monitorObj.screenW,
+    screenH: monitorObj.screenH,
     keyMap,
     update,
   };
