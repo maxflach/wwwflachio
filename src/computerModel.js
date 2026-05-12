@@ -663,6 +663,9 @@ function buildCase(materials) {
   const fdEject = new THREE.Mesh(bodyBox(0.05, 0.035, 0.025), matBodyShadow);
   fdEject.position.set(0.95, H * 0.4, D / 2 + 0.016);
   group.add(fdEject);
+  // Record the slot's world position so the disk-insertion animation knows
+  // where to fly to. The case group sits at the root, so this is world-space.
+  const slotPos = new THREE.Vector3(0.55, H * 0.41, D / 2 + 0.014);
 
   // Power button (round)
   const pwrBtn = new THREE.Mesh(
@@ -702,7 +705,7 @@ function buildCase(materials) {
     group.add(slit);
   }
 
-  return { group, height: H, width: W, depth: D };
+  return { group, height: H, width: W, depth: D, slotPos };
 }
 
 function buildMonitor(materials, pixiCanvas) {
@@ -822,6 +825,19 @@ export function buildComputerScene(pixiCanvas) {
   const rightSp = buildSpeaker();
   rightSp.position.set(monitorObj.width / 2 + 0.45, caseObj.height, -0.45);
   root.add(rightSp);
+
+  // ----- Filler pile of non-bootable disks (visual flavor) — back-right
+  //       corner so it doesn't fight with the individual bootables. -----
+  const floppyPile = buildFloppyPile();
+  floppyPile.group.position.set(3.6, 0, -0.2);
+  floppyPile.group.rotation.y = -0.18;
+  root.add(floppyPile.group);
+
+  // ----- Individual disks scattered on the desk (each clickable on its own). -----
+  const deskDisks = buildDeskDisks();
+  root.add(deskDisks.group);
+
+  const allDisks = [...floppyPile.disks, ...deskDisks.disks];
 
   // ----- Keyboard (104-key) -----
   const keyMap = new Map();
@@ -1009,7 +1025,254 @@ export function buildComputerScene(pixiCanvas) {
     screenH: monitorObj.screenH,
     keyMap,
     update,
+    // Every clickable disk (pile + loose) + the slot's world position so
+    // Home.jsx can raycast and animate insertion into the floppy drive.
+    floppyDisks: allDisks,
+    floppyPileGroup: floppyPile.group,
+    slotPos: caseObj.slotPos.clone(),
   };
+}
+
+// ===== 3.5" floppy diskettes (clickable, sit on the desk) =====
+
+function makeFloppyLabelTexture(text, handwritten = false) {
+  const c = document.createElement("canvas");
+  c.width = 256;
+  c.height = 180;
+  const ctx = c.getContext("2d");
+
+  // Off-white label paper
+  ctx.fillStyle = "#f4eed8";
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  // Subtle border
+  ctx.strokeStyle = "rgba(60,40,20,0.18)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(2, 2, c.width - 4, c.height - 4);
+
+  // Faint horizontal "lined paper" rules to suggest a real label
+  ctx.fillStyle = "rgba(80,80,140,0.10)";
+  for (let y = 36; y < c.height - 16; y += 28) {
+    ctx.fillRect(10, y, c.width - 20, 1);
+  }
+
+  // Shrink font size until the text fits within maxWidth (no overflow off
+  // the label edge for long names like "WORDPERFECT 5").
+  const fitFont = (template, text, maxWidth, startSize, minSize) => {
+    let size = startSize;
+    while (size > minSize) {
+      ctx.font = template.replace("{S}", size);
+      if (ctx.measureText(text).width <= maxWidth) break;
+      size -= 2;
+    }
+    return size;
+  };
+
+  if (handwritten) {
+    // Sharpie scrawl: rotated, bold, slightly imperfect.
+    ctx.save();
+    ctx.translate(c.width / 2, c.height / 2 + 6);
+    ctx.rotate(-0.07);
+    ctx.fillStyle = "#0a0a0a";
+    fitFont("italic 900 {S}px 'Brush Script MT', 'Marker Felt', 'Comic Sans MS', cursive",
+            text, c.width - 60, 92, 28);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    // Render twice with tiny offset for that "thick marker" feel
+    ctx.fillText(text, 0, 0);
+    ctx.fillText(text, 1, 0);
+    // Underline scrawl
+    ctx.strokeStyle = "#0a0a0a";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(-70, 42);
+    ctx.bezierCurveTo(-30, 48, 30, 38, 78, 46);
+    ctx.stroke();
+    ctx.restore();
+    // A couple of ink smudges
+    ctx.fillStyle = "rgba(20,20,20,0.18)";
+    ctx.beginPath();
+    ctx.arc(40, 28, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(220, 150, 4, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = "#1a1a1a";
+    fitFont("bold {S}px 'Courier New', monospace", text, c.width - 32, 30, 12);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, c.width / 2, c.height / 2);
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Builds a single 3.5" floppy. `floppyId` is set ONLY on the Group's userData
+// — the raycaster's pickDisk walks up until it finds it, so any child mesh
+// hit (body, slider, label) resolves to the whole disk group. If `bundleUrl`
+// is set, clicking the disk boots that game; otherwise the disk just bounces.
+function makeFloppy({ label, handwritten = false, caseColor = 0x1a1a1a, id, bundleUrl, gameLabel, gameFile }) {
+  const group = new THREE.Group();
+  const W = 0.48, H = 0.022, D = 0.5;
+
+  // Case body — rounded plastic
+  const caseMat = new THREE.MeshStandardMaterial({
+    color: caseColor,
+    roughness: 0.42,
+    metalness: 0.04,
+  });
+  const body = new THREE.Mesh(rbox(W, H, D, 0.012, 2), caseMat);
+  body.position.y = H / 2;
+  group.add(body);
+
+  // Metal shutter — the spring-loaded slider that exposes the magnetic disk.
+  // Sits on the back edge (label-up orientation = shutter goes in FIRST).
+  const sliderMat = new THREE.MeshStandardMaterial({
+    color: 0xb8b8b8,
+    metalness: 0.85,
+    roughness: 0.28,
+  });
+  const slider = new THREE.Mesh(
+    new THREE.BoxGeometry(W * 0.42, H * 0.6, D * 0.22),
+    sliderMat
+  );
+  slider.position.set(0, H * 0.85, -D * 0.36);
+  group.add(slider);
+
+  // Shutter window (the dark rectangular hole in the slider's center)
+  const shutterWindow = new THREE.Mesh(
+    new THREE.BoxGeometry(W * 0.18, H * 0.65, D * 0.10),
+    new THREE.MeshStandardMaterial({ color: 0x080808 })
+  );
+  shutterWindow.position.set(0, H * 0.87, -D * 0.36);
+  group.add(shutterWindow);
+
+  // Embossed arrow on the top-right corner ("insert this way")
+  const arrowMat = new THREE.MeshStandardMaterial({ color: 0x404040 });
+  const arrow = new THREE.Mesh(
+    new THREE.BoxGeometry(W * 0.04, H * 0.2, D * 0.06),
+    arrowMat
+  );
+  arrow.position.set(W * 0.35, H + 0.001, -D * 0.15);
+  group.add(arrow);
+
+  // Label on top — covers most of the front face
+  const labelTex = makeFloppyLabelTexture(label, handwritten);
+  const labelPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(W * 0.82, D * 0.55),
+    new THREE.MeshBasicMaterial({
+      map: labelTex,
+      transparent: true,
+      depthWrite: false,
+    })
+  );
+  labelPlane.rotation.x = -Math.PI / 2;
+  labelPlane.position.set(0, H + 0.001, D * 0.08);
+  group.add(labelPlane);
+
+  // Only the GROUP gets the floppyId so click-resolve always lands here.
+  group.userData = {
+    floppyId: id,
+    label,
+    bundleUrl,
+    gameLabel,
+    gameFile,
+    W, H, D,
+  };
+  return group;
+}
+
+// Color palette of typical 90s floppies, shared by the pile + loose disk.
+const FLOPPY_COLORS = {
+  black: 0x1c1c1c,
+  grey: 0x6c6c6c,
+  red: 0x9a2828,
+  blue: 0x254a8a,
+  yellow: 0xc8a830,
+  orange: 0xd66830,
+  white: 0xeae5dc,
+};
+
+// A stack of NON-bootable filler diskettes — just visual flavor in the
+// corner of the desk. Bootables now live on their own (see DESK_DISKS below)
+// so each can be clicked without un-stacking.
+export function buildFloppyPile() {
+  const group = new THREE.Group();
+  const disks = [];
+
+  const PILE = [
+    { id: "disk-wordp",   label: "WORDPERFECT 5", color: FLOPPY_COLORS.red,    yaw: 0.07 },
+    { id: "disk-norton",  label: "NORTON UTIL.",  color: FLOPPY_COLORS.blue,   yaw: -0.18 },
+    { id: "disk-mixtape", label: "Mixtape '96",   color: FLOPPY_COLORS.orange, yaw: -0.05, handwritten: true },
+  ];
+
+  PILE.forEach((spec, i) => {
+    const disk = makeFloppy({
+      label: spec.label,
+      handwritten: spec.handwritten || false,
+      caseColor: spec.color,
+      id: spec.id,
+    });
+    disk.position.y = i * 0.025;
+    disk.rotation.y = spec.yaw;
+    group.add(disk);
+    disks.push({ id: spec.id, label: spec.label, mesh: disk });
+  });
+
+  return { group, disks };
+}
+
+// Individual disks placed at their own spots on the desk. Each is a separate
+// click target so the player can pick any of the three bootable games (or
+// poke the loose BACKUP). Returns a group plus a flat disks list.
+export function buildDeskDisks() {
+  const group = new THREE.Group();
+  const disks = [];
+
+  // World-space spots on the desk. y stays 0 (lying flat on the desk plane).
+  // Yaw is a casual rotation so they don't look like a grid.
+  const SPOTS = [
+    {
+      id: "disk-prince", label: "PRINCE", color: FLOPPY_COLORS.red,
+      handwritten: true, x: -3.4, z: 0.6, yaw: -0.32,
+      bundleUrl: "/prince-of-persia.jsdos", gameLabel: "PRINCE", gameFile: "PRINCE.EXE",
+    },
+    {
+      id: "disk-keen", label: "KEEN 1", color: FLOPPY_COLORS.white,
+      handwritten: true, x: -2.6, z: 1.9, yaw: 0.41,
+      bundleUrl: "/keen-1.jsdos", gameLabel: "KEEN 1", gameFile: "KEEN1.EXE",
+    },
+    {
+      id: "disk-doom", label: "DOOM", color: FLOPPY_COLORS.black,
+      handwritten: true, x: 3.0, z: 1.9, yaw: -0.22,
+      bundleUrl: "/doom.jsdos", gameLabel: "DOOM", gameFile: "DOOM.EXE",
+    },
+    {
+      id: "disk-backup-loose", label: "BACKUP — DO NOT LOSE !!", color: FLOPPY_COLORS.yellow,
+      handwritten: true, x: 2.0, z: 2.5, yaw: 0.95,
+    },
+  ];
+
+  for (const spec of SPOTS) {
+    const disk = makeFloppy({
+      label: spec.label,
+      handwritten: spec.handwritten || false,
+      caseColor: spec.color,
+      id: spec.id,
+      bundleUrl: spec.bundleUrl,
+      gameLabel: spec.gameLabel,
+      gameFile: spec.gameFile,
+    });
+    disk.position.set(spec.x, 0, spec.z);
+    disk.rotation.y = spec.yaw;
+    group.add(disk);
+    disks.push({ id: spec.id, label: spec.label, mesh: disk });
+  }
+  return { group, disks };
 }
 
 export function setKeyState(keyMap, code, down) {

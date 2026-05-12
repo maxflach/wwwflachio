@@ -23,6 +23,7 @@ import { BOOT_LINES, BOOT_LINE_MS, BOOT_HOLD_MS, drawBoot } from "./screens/boot
 import { MENU_ITEMS, drawMenu } from "./screens/menu";
 import { drawTerminal } from "./screens/terminal";
 import { drawScreensaver, updateScreensaver } from "./screens/screensaver";
+import { startDoom, drawDoomLoading, blitDoomCanvas } from "./screens/doom";
 
 // Switch to screensaver after this much idle time (no key activity)
 const IDLE_TIMEOUT_MS = 30000;
@@ -56,7 +57,7 @@ export default function Home() {
     crtNear: false,
     cameraX: 0,
     t: 0,
-    mode: "boot",                              // "boot" | "menu" | "game" | "terminal" | "screensaver"
+    mode: "boot",                              // "boot" | "menu" | "game" | "terminal" | "screensaver" | "doom"
     savedMode: "menu",                         // mode to return to from screensaver
     lastActivity: performance.now(),
     boot: { elapsed: 0, lineIndex: 0, postPause: 0 },
@@ -69,7 +70,18 @@ export default function Home() {
       history: [{ kind: "out", text: "FlachOS shell — type 'help'. Esc returns to menu." }],
     },
     reveal: null,                                        // { label, text } or null
+    doom: null,                                          // { t, error, ready } while in doom mode
   });
+
+  // Off-DOM host element js-dos mounts its <canvas> into. Lives in the DOM
+  // (visually hidden, off-screen) so the WebGL/2D canvas inside actually
+  // renders frames we can blit onto our 480×270 game canvas.
+  const doomHostRef = useRef(null);
+  const doomControllerRef = useRef(null);
+  // Active disk-insertion animation: { mesh, t, duration, startPos, midPos, endPos }
+  const insertionRef = useRef(null);
+  // Active disk-ejection animation (reverse of insertion).
+  const ejectionRef = useRef(null);
 
   const [mode, setMode] = useState("boot");
   const [foundCount, setFoundCount] = useState(0);
@@ -123,6 +135,64 @@ export default function Home() {
     setMode(next);
   }
 
+  // Called once the disk-insertion animation completes. Switches into doom
+  // mode (which shows the loading screen on the CRT) and boots js-dos with
+  // the bundle URL declared by the inserted disk.
+  function bootGame(bundleUrl, gameLabel, gameFile) {
+    stateRef.current.doom = {
+      t: 0,
+      error: null,
+      ready: false,
+      gameLabel: gameLabel || "GAME",
+      gameFile: gameFile || "GAME.EXE",
+    };
+    switchMode("doom");
+    const host = doomHostRef.current;
+    if (!host) {
+      stateRef.current.doom.error = "no host element";
+      return;
+    }
+    startDoom(host, bundleUrl).then((ctrl) => {
+      doomControllerRef.current = ctrl;
+      if (stateRef.current.doom) stateRef.current.doom.ready = true;
+    }).catch((err) => {
+      console.error("[doom] startDoom failed", err);
+      if (stateRef.current.doom) stateRef.current.doom.error = String(err.message || err);
+    });
+  }
+
+  // Esc in doom mode — tear down the emulator, pop whichever disk is in the
+  // drive back out, and return to the menu. The inserted disk's id is read
+  // from the scene state set during insertion.
+  function ejectDoom() {
+    if (doomControllerRef.current) {
+      try { doomControllerRef.current.destroy(); } catch (err) { console.warn("destroy", err); }
+      doomControllerRef.current = null;
+    }
+    const insertedId = stateRef.current.insertedDiskId;
+    stateRef.current.doom = null;
+    stateRef.current.insertedDiskId = null;
+    switchMode("menu");
+
+    const built = sceneRef.current;
+    const disk = built?.floppyDisks?.find((d) => d.id === insertedId)?.mesh;
+    const ins = disk?.userData._insertion;
+    if (!disk || !ins) return;
+    disk.visible = true;
+    disk.position.copy(ins.endPos);
+    disk.quaternion.copy(ins.endQuat);
+    ejectionRef.current = {
+      disk,
+      t: 0,
+      duration: 1.3,
+      startPos: ins.startPos.clone(),
+      startQuat: ins.startQuat.clone(),
+      approach: ins.approach.clone(),
+      endPos: ins.endPos.clone(),
+      endQuat: ins.endQuat.clone(),
+    };
+  }
+
   // ---- Input ----
   useEffect(() => {
     const s = stateRef.current;
@@ -139,6 +209,26 @@ export default function Home() {
       if (s.mode === "screensaver") {
         e.preventDefault();
         switchMode(s.savedMode || "menu");
+        return;
+      }
+
+      // ----- DOOM mode: Esc ejects; everything else is forwarded into the
+      //                  js-dos canvas (since its host is off-screen and not
+      //                  the focused element, events don't reach it on their
+      //                  own). preventDefault on game keys so the browser
+      //                  doesn't scroll/page on Space etc. -----
+      if (s.mode === "doom") {
+        if (k === "Escape") {
+          e.preventDefault();
+          ejectDoom();
+          return;
+        }
+        // Stop the browser from acting on game keys (Space scroll, etc.)
+        if ([" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+             "Tab", "/", "'"].includes(k)) {
+          e.preventDefault();
+        }
+        doomControllerRef.current?.forwardKey?.(e);
         return;
       }
 
@@ -285,6 +375,10 @@ export default function Home() {
     }
 
     function up(e) {
+      if (s.mode === "doom") {
+        doomControllerRef.current?.forwardKey?.(e);
+        return;
+      }
       const k = e.key;
       if (k === "ArrowLeft" || k === "a" || k === "A") s.keys.left = false;
       else if (k === "ArrowRight" || k === "d" || k === "D") s.keys.right = false;
@@ -334,6 +428,11 @@ export default function Home() {
     if (s.mode === "menu") return;
     if (s.mode === "terminal") return;
     if (s.mode === "screensaver") { updateScreensaver(s, dt); return; }
+    if (s.mode === "doom") {
+      // Loading screen anim only; gameplay is rendered by js-dos itself.
+      if (s.doom) s.doom.t += dt;
+      return;
+    }
 
     // ----- Game mode physics -----
     const p = s.player;
@@ -426,6 +525,13 @@ export default function Home() {
     if (s.mode === "menu")        { drawMenu(ctx, s); return; }
     if (s.mode === "terminal")    { drawTerminal(ctx, s); return; }
     if (s.mode === "screensaver") { drawScreensaver(ctx, s); return; }
+    if (s.mode === "doom") {
+      const live = doomControllerRef.current?.getCanvas();
+      const ready = live && live.width > 0 && live.height > 0 && !s.doom?.error;
+      if (ready) blitDoomCanvas(ctx, live);
+      else       drawDoomLoading(ctx, s.doom?.t || 0, s.doom?.error, s.doom?.gameLabel, s.doom?.gameFile);
+      return;
+    }
 
     const cam = Math.round(s.cameraX);
 
@@ -500,6 +606,8 @@ export default function Home() {
     let raf = 0;
     let onResize = null;
     let onMouseMove = null;
+    let onPointerDown = null;
+    let onCanvasMove = null;
     let mouseX = 0, mouseY = 0;
 
     (async () => {
@@ -609,6 +717,86 @@ export default function Home() {
       scene.add(built.object3D);
       sceneRef.current = built;
 
+      // ----- Click-to-insert: raycast the floppy disks. The DOOM disk flies
+      //       to the floppy drive and boots js-dos when it gets there. -----
+      const raycaster = new THREE.Raycaster();
+      const ndc = new THREE.Vector2();
+      const diskMeshes = built.floppyDisks.map((d) => d.mesh);
+
+      function pickDisk(clientX, clientY) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+        ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(ndc, camera);
+        const hits = raycaster.intersectObjects(diskMeshes, true);
+        if (!hits.length) return null;
+        let obj = hits[0].object;
+        while (obj && !obj.userData?.floppyId) obj = obj.parent;
+        return obj || null;
+      }
+
+      onPointerDown = (e) => {
+        if (insertionRef.current) return;
+        const m = stateRef.current.mode;
+        // Only allow disk clicks when the 3D scene is the "active" surface.
+        if (m !== "menu" && m !== "game") return;
+        if (stateRef.current.reveal) return;
+        const disk = pickDisk(e.clientX, e.clientY);
+        if (!disk) return;
+        if (!disk.userData.bundleUrl) {
+          // Non-bootable disk: small bounce so it feels interactive without
+          // actually doing anything.
+          disk.userData._bounce = 1;
+          return;
+        }
+        startInsertion(disk);
+      };
+      renderer.domElement.addEventListener("pointerdown", onPointerDown);
+
+      // Cursor: pointer when hovering a disk in a clickable mode.
+      onCanvasMove = (e) => {
+        const m = stateRef.current.mode;
+        if (m !== "menu" && m !== "game") {
+          renderer.domElement.style.cursor = "";
+          return;
+        }
+        const disk = pickDisk(e.clientX, e.clientY);
+        renderer.domElement.style.cursor = disk ? "pointer" : "";
+      };
+      renderer.domElement.addEventListener("pointermove", onCanvasMove);
+
+      function startInsertion(disk) {
+        // Reparent to scene root so we can drive its world transform directly,
+        // independent of the pile group's offset/rotation.
+        const startPos = new THREE.Vector3();
+        disk.getWorldPosition(startPos);
+        const startQuat = disk.getWorldQuaternion(new THREE.Quaternion());
+        built.object3D.attach(disk);
+        disk.position.copy(startPos);
+        disk.quaternion.copy(startQuat);
+
+        // Approach point: floating just in front of the drive slot, at slot height.
+        const slot = built.slotPos;
+        const approach = new THREE.Vector3(slot.x, slot.y, slot.z + 0.55);
+        // End point: nearly fully consumed by the slot.
+        const end = new THREE.Vector3(slot.x, slot.y, slot.z - 0.18);
+
+        insertionRef.current = {
+          disk,
+          t: 0,
+          duration: 1.4,
+          startPos,
+          approach,
+          end,
+          startQuat,
+          // Target quaternion: aligned with world axes, label facing camera.
+          endQuat: new THREE.Quaternion(), // identity
+        };
+      }
+      // Expose to component-scope closures via a side effect — used nowhere
+      // else, but keeps the function near its data.
+      // (No-op: startInsertion is called only from onPointerDown above.)
+
       onMouseMove = (e) => {
         // Skip parallax on touch — touch-driven pointermove events would jerk
         // the camera every time a button is tapped.
@@ -634,6 +822,11 @@ export default function Home() {
         new THREE.Vector3(), new THREE.Vector3(),
       ];
 
+      // Easing helpers for the disk-insertion tween
+      const easeOutCubic = (u) => 1 - Math.pow(1 - u, 3);
+      const easeInQuad   = (u) => u * u;
+      const tmpQuat = new THREE.Quaternion();
+
       let last = performance.now();
       const loop = (now) => {
         const dt = (now - last) / 1000;
@@ -643,6 +836,96 @@ export default function Home() {
         camera.position.x = camBase.x + mouseX * 0.45;
         camera.position.y = camBase.y + (-mouseY) * 0.25;
         camera.lookAt(camTarget);
+
+        // ----- Drive the disk-insertion animation if one is active. -----
+        const ins = insertionRef.current;
+        if (ins) {
+          ins.t += dt;
+          const p = Math.min(1, ins.t / ins.duration);
+          if (p < 0.55) {
+            // Phase 1: lift off the desk and float to the approach position.
+            const u = easeOutCubic(p / 0.55);
+            ins.disk.position.lerpVectors(ins.startPos, ins.approach, u);
+            tmpQuat.copy(ins.startQuat).slerp(ins.endQuat, u);
+            ins.disk.quaternion.copy(tmpQuat);
+          } else {
+            // Phase 2: slide horizontally into the slot.
+            const u = easeInQuad((p - 0.55) / 0.45);
+            ins.disk.position.lerpVectors(ins.approach, ins.end, u);
+            // Fade as it goes in
+            const opacity = 1 - u * 0.92;
+            ins.disk.traverse((o) => {
+              if (o.isMesh && o.material) {
+                o.material.transparent = true;
+                o.material.opacity = opacity;
+              }
+            });
+          }
+          if (p >= 1) {
+            // Stash the trajectory on the disk itself so eject can play it
+            // back in reverse without recomputing pile world coords.
+            ins.disk.userData._insertion = {
+              startPos: ins.startPos.clone(),
+              startQuat: ins.startQuat.clone(),
+              approach: ins.approach.clone(),
+              endPos: ins.end.clone(),
+              endQuat: ins.endQuat.clone(),
+            };
+            const ud = ins.disk.userData;
+            stateRef.current.insertedDiskId = ud.floppyId;
+            ins.disk.visible = false;
+            insertionRef.current = null;
+            bootGame(ud.bundleUrl, ud.gameLabel, ud.gameFile);
+          }
+        }
+
+        // ----- Disk-eject animation: reverse of insertion. -----
+        const ej = ejectionRef.current;
+        if (ej) {
+          ej.t += dt;
+          const p = Math.min(1, ej.t / ej.duration);
+          if (p < 0.45) {
+            // Phase 1: slide out of the slot to the approach point.
+            const u = easeOutCubic(p / 0.45);
+            ej.disk.position.lerpVectors(ej.endPos, ej.approach, u);
+            const opacity = 0.08 + u * 0.92;
+            ej.disk.traverse((o) => {
+              if (o.isMesh && o.material) {
+                o.material.transparent = true;
+                o.material.opacity = opacity;
+              }
+            });
+          } else {
+            // Phase 2: drift back down to the pile + rotate to original yaw.
+            const u = easeOutCubic((p - 0.45) / 0.55);
+            ej.disk.position.lerpVectors(ej.approach, ej.startPos, u);
+            tmpQuat.copy(ej.endQuat).slerp(ej.startQuat, u);
+            ej.disk.quaternion.copy(tmpQuat);
+            ej.disk.traverse((o) => {
+              if (o.isMesh && o.material) {
+                o.material.opacity = 1;
+                o.material.transparent = false;
+              }
+            });
+          }
+          if (p >= 1) {
+            ejectionRef.current = null;
+          }
+        }
+
+        // Tiny bounce on a non-DOOM disk the user clicked
+        for (const d of built.floppyDisks) {
+          const b = d.mesh.userData._bounce;
+          if (!b) continue;
+          d.mesh.userData._bounce = b - dt * 4;
+          if (d.mesh.userData._bounce <= 0) {
+            d.mesh.position.y = d.mesh.userData._baseY ?? d.mesh.position.y;
+            delete d.mesh.userData._bounce;
+            continue;
+          }
+          if (d.mesh.userData._baseY === undefined) d.mesh.userData._baseY = d.mesh.position.y;
+          d.mesh.position.y = d.mesh.userData._baseY + Math.sin(b * Math.PI) * 0.04;
+        }
 
         if (sceneRef.current) sceneRef.current.update(dt);
         renderer.render(scene, camera);
@@ -684,6 +967,14 @@ export default function Home() {
       cancelAnimationFrame(raf);
       if (onResize) window.removeEventListener("resize", onResize);
       if (onMouseMove) window.removeEventListener("pointermove", onMouseMove);
+      if (renderer?.domElement) {
+        if (onPointerDown) renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+        if (onCanvasMove)  renderer.domElement.removeEventListener("pointermove", onCanvasMove);
+      }
+      if (doomControllerRef.current) {
+        try { doomControllerRef.current.destroy(); } catch { /* ignore */ }
+        doomControllerRef.current = null;
+      }
       filtersRef.current.crt = null;
       filtersRef.current.rgb = null;
       const built = sceneRef.current;
@@ -720,7 +1011,7 @@ export default function Home() {
   useEffect(() => {
     const id = setInterval(() => {
       const s = stateRef.current;
-      if (s.mode === "screensaver" || s.mode === "boot") return;
+      if (s.mode === "screensaver" || s.mode === "boot" || s.mode === "doom") return;
       if (performance.now() - s.lastActivity > IDLE_TIMEOUT_MS) {
         s.savedMode = s.mode;
         switchMode("screensaver");
@@ -788,6 +1079,23 @@ export default function Home() {
         ref={threeHostRef}
         className="absolute inset-0 transition-transform duration-150 ease-out"
         style={{ transform: `translateY(-${sceneShift}px)` }}
+      />
+
+      {/* Off-screen host for the js-dos DOOM emulator. The <canvas> js-dos
+          creates inside this div is sampled every frame and drawn onto the
+          CRT screen texture via blitDoomCanvas. Sized 640×400 (DOOM's native
+          aspect) so the emulator picks a usable resolution. */}
+      <div
+        ref={doomHostRef}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          left: -20000,
+          top: 0,
+          width: 640,
+          height: 400,
+          pointerEvents: "none",
+        }}
       />
 
       {/* Mobile-only: on-screen control deck synthesizing keyboard events */}
