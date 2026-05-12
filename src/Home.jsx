@@ -734,6 +734,10 @@ export default function Home() {
       // plastic doesn't blow out white.
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 0.78;
+      // Soft shadows — the desk-lamp spot light is the scene's main shadow
+      // caster; PCFSoft gives a believable falloff for a single warm source.
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       host.appendChild(renderer.domElement);
 
       // Procedural environment map — without this the clearcoat layer on the

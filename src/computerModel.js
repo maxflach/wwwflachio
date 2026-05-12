@@ -840,6 +840,26 @@ export function buildComputerScene(pixiCanvas) {
   const deskDisks = buildDeskDisks();
   root.add(deskDisks.group);
 
+  // ----- Jolt Cola can, left of the case behind the keyboard. Period-correct
+  //       caffeine. Rotated so the label faces the camera, which sits up and
+  //       to the right of the can. -----
+  const jolt = buildJoltCan();
+  jolt.position.set(-3.6, 0, 1.5);
+  // CylinderGeometry UV u=0 sits on +Z, so the brand block centered at
+  // u=0.25 naturally faces +X. Rotate the can so that label normal points
+  // up-and-right toward the camera (which sits at +X, +Z relative to it).
+  jolt.rotation.y = -1.15;
+  root.add(jolt);
+
+  // ----- Desk lamp — pivoting swing-arm casting a warm cone over the case
+  //       and desk. The spot light inside the shade is the scene's main
+  //       shadow caster. -----
+  const lamp = buildDeskLamp();
+  lamp.group.position.set(-4.4, 0, -1.5);
+  // Aim the swing slightly toward the case center so the cone covers it.
+  lamp.group.rotation.y = 0.45;
+  root.add(lamp.group);
+
   const allDisks = [...floppyPile.disks, ...deskDisks.disks];
 
   // ----- Keyboard (104-key) -----
@@ -1000,14 +1020,47 @@ export function buildComputerScene(pixiCanvas) {
   rim.position.set(0, 1, -4);
   root.add(rim);
 
-  // ----- Desk plane (textured wood) -----
+  // ----- Desk — finite block so the camera can see its edges fall away
+  //       to the dark backdrop instead of running to infinity. -----
+  const deskW = 16;
+  const deskD = 9;
+  const deskT = 0.35;
   const desk = new THREE.Mesh(
-    new THREE.PlaneGeometry(40, 40),
+    new THREE.BoxGeometry(deskW, deskT, deskD),
     new THREE.MeshStandardMaterial({ map: tex.wood, roughness: 0.95 })
   );
-  desk.rotation.x = -Math.PI / 2;
-  desk.position.y = -0.001;
+  desk.position.set(0, -deskT / 2, 1.0);
+  desk.receiveShadow = true;
+  desk.castShadow = true;
   root.add(desk);
+
+  // Floor far below the desk, in a darker shade — gives the scene a vertical
+  // dimension and stops the off-desk space from reading as "void".
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(60, 60),
+    new THREE.MeshStandardMaterial({ color: 0x0e0805, roughness: 1 })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -3.5;
+  floor.receiveShadow = true;
+  root.add(floor);
+
+  // ----- Shadow flags. Every mesh casts + receives by default; the desk is
+  //       a receiver-only (set above) since geometrically it has nothing
+  //       above it to cast onto something else; LEDs/emissive meshes don't
+  //       need to cast since they're tiny and inside the case. -----
+  root.traverse((obj) => {
+    if (!obj.isMesh || obj === desk) return;
+    // Skip MeshBasicMaterial — those are unlit (LEDs, labels, the CRT
+    // screen mesh) and shouldn't cast or receive shadows.
+    const mat = obj.material;
+    const isBasic = Array.isArray(mat)
+      ? mat.every((m) => m.isMeshBasicMaterial)
+      : mat?.isMeshBasicMaterial;
+    if (isBasic) return;
+    obj.castShadow = true;
+    obj.receiveShadow = true;
+  });
 
   // ----- Update fn (called every frame from Home.jsx) -----
   function update(dt) {
@@ -1199,6 +1252,308 @@ const FLOPPY_COLORS = {
   orange: 0xd66830,
   white: 0xeae5dc,
 };
+
+// ===== Jolt Cola can — period-correct caffeine on the desk =====
+
+// Wrap-around label texture. Width = circumference (twice the text width so
+// the brand reads from any angle), height = body height. Seam at u=0/u=1 is
+// pure red so the wrap looks continuous.
+function makeJoltLabel() {
+  const c = document.createElement("canvas");
+  c.width = 1024;
+  c.height = 384;
+  const ctx = c.getContext("2d");
+
+  // Red base — classic Jolt red
+  ctx.fillStyle = "#c81818";
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  // Subtle vertical highlight band to fake cylindrical light direction
+  const grad = ctx.createLinearGradient(0, 0, c.width, 0);
+  grad.addColorStop(0,    "rgba(0,0,0,0.18)");
+  grad.addColorStop(0.25, "rgba(255,255,255,0.10)");
+  grad.addColorStop(0.5,  "rgba(0,0,0,0.18)");
+  grad.addColorStop(0.75, "rgba(255,255,255,0.10)");
+  grad.addColorStop(1,    "rgba(0,0,0,0.18)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  // Top / bottom bands — silver-ish trim
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(0, 0, c.width, 28);
+  ctx.fillRect(0, c.height - 28, c.width, 28);
+  ctx.fillStyle = "#d8d8d8";
+  ctx.fillRect(0, 28, c.width, 6);
+  ctx.fillRect(0, c.height - 34, c.width, 6);
+
+  // Brand block repeated twice around the circumference
+  const REPS = 2;
+  for (let r = 0; r < REPS; r++) {
+    const cx = (c.width / REPS) * (r + 0.5);
+    const cy = c.height / 2;
+
+    // Yellow lightning bolt behind the text
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.fillStyle = "#ffe020";
+    ctx.beginPath();
+    ctx.moveTo(-150, -110);
+    ctx.lineTo(-40,  -110);
+    ctx.lineTo(-90,  -10);
+    ctx.lineTo(-20,  -10);
+    ctx.lineTo(-110,  130);
+    ctx.lineTo(-60,    20);
+    ctx.lineTo(-130,   20);
+    ctx.closePath();
+    ctx.fill();
+    // Bolt outline
+    ctx.strokeStyle = "#1a1a1a";
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.restore();
+
+    // "JOLT!" — chunky black sans-serif, slightly tilted
+    ctx.save();
+    ctx.translate(cx + 40, cy);
+    ctx.rotate(-0.05);
+    ctx.fillStyle = "#0a0a0a";
+    ctx.font = "900 150px 'Impact', 'Arial Black', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("JOLT!", 0, 0);
+    ctx.restore();
+
+    // Slogan curving below
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 22px 'Helvetica', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("ALL THE SUGAR + TWICE THE CAFFEINE", cx, cy + 100);
+
+    // "Cola" italic above
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "italic bold 36px 'Georgia', serif";
+    ctx.fillText("Cola", cx + 80, cy - 86);
+
+    // Tiny nutrition mark
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "10px sans-serif";
+    ctx.fillText("12 FL OZ (355 mL)", cx, cy + 150);
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+export function buildJoltCan() {
+  const group = new THREE.Group();
+  const H = 0.46;
+  const R = 0.16;
+  const SEG = 36;
+
+  // Body — labelled cylinder
+  const bodyMat = new THREE.MeshStandardMaterial({
+    map: makeJoltLabel(),
+    roughness: 0.42,
+    metalness: 0.18,           // hint of the metal under the print
+  });
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(R, R, H * 0.88, SEG, 1, true),
+    bodyMat
+  );
+  body.position.y = H * 0.44;
+  group.add(body);
+
+  // Bottom rim — tapers slightly inward (standard can profile)
+  const aluMat = new THREE.MeshStandardMaterial({
+    color: 0xc8c8d0,
+    metalness: 0.88,
+    roughness: 0.26,
+  });
+  const aluMatDark = new THREE.MeshStandardMaterial({
+    color: 0x8a8a92,
+    metalness: 0.88,
+    roughness: 0.34,
+  });
+  const bottom = new THREE.Mesh(
+    new THREE.CylinderGeometry(R * 0.94, R * 0.86, H * 0.05, SEG),
+    aluMatDark
+  );
+  bottom.position.y = H * 0.025;
+  group.add(bottom);
+
+  // Top neck — slight inward taper
+  const neck = new THREE.Mesh(
+    new THREE.CylinderGeometry(R * 0.86, R, H * 0.08, SEG),
+    aluMat
+  );
+  neck.position.y = H * 0.88 + H * 0.04;
+  group.add(neck);
+
+  // Lid surface (recessed slightly inside the neck)
+  const lid = new THREE.Mesh(
+    new THREE.CylinderGeometry(R * 0.82, R * 0.82, H * 0.015, SEG),
+    aluMatDark
+  );
+  lid.position.y = H * 0.88 + H * 0.08;
+  group.add(lid);
+
+  // Pull tab — small flat aluminum strip sitting on the lid
+  const tab = new THREE.Mesh(
+    new THREE.BoxGeometry(R * 0.95, H * 0.018, R * 0.28),
+    aluMat
+  );
+  tab.position.set(R * 0.05, H * 0.88 + H * 0.094, 0);
+  group.add(tab);
+
+  // Hole under the tab (the rivet) — small dark disc
+  const rivet = new THREE.Mesh(
+    new THREE.CylinderGeometry(R * 0.05, R * 0.05, H * 0.005, 12),
+    new THREE.MeshStandardMaterial({ color: 0x202020, metalness: 0.6, roughness: 0.3 })
+  );
+  rivet.position.set(R * 0.05, H * 0.88 + H * 0.105, 0);
+  group.add(rivet);
+
+  // Pop-tab opening hint (oval indent — a darker patch on the lid)
+  const opening = new THREE.Mesh(
+    new THREE.BoxGeometry(R * 0.55, H * 0.003, R * 0.22),
+    new THREE.MeshStandardMaterial({ color: 0x4a4a4a, metalness: 0.7, roughness: 0.35 })
+  );
+  opening.position.set(-R * 0.32, H * 0.88 + H * 0.084, 0);
+  group.add(opening);
+
+  return group;
+}
+
+// ===== Desk lamp + spot light =====
+// Classic articulated swing-arm desk lamp. Heavy base, vertical pole, one
+// forward-angled arm, conical shade with a warm bulb inside. The spot light
+// is what casts real shadows over the scene.
+export function buildDeskLamp() {
+  const group = new THREE.Group();
+
+  // Materials — dark anodized metal for the body, brass-y interior for the
+  // shade so the bulb glow has somewhere to bounce.
+  const matBody = new THREE.MeshStandardMaterial({
+    color: 0x2a2828, roughness: 0.42, metalness: 0.55,
+  });
+  const matJoint = new THREE.MeshStandardMaterial({
+    color: 0x1a1818, roughness: 0.5, metalness: 0.65,
+  });
+  const matShadeOuter = new THREE.MeshStandardMaterial({
+    color: 0x6a2818, roughness: 0.38, metalness: 0.5,
+    side: THREE.DoubleSide,
+  });
+  const matBulb = new THREE.MeshStandardMaterial({
+    color: 0xfff0c0, emissive: 0xfff0c0, emissiveIntensity: 1.8,
+    roughness: 0.4,
+  });
+
+  // Base — wide weighted disc + a small collar
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.48, 0.52, 0.09, 32),
+    matBody
+  );
+  base.position.y = 0.045;
+  group.add(base);
+  const collar = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.11, 0.17, 0.07, 18),
+    matJoint
+  );
+  collar.position.y = 0.13;
+  group.add(collar);
+
+  // Vertical pole — tall and noticeable
+  const poleH = 2.3;
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.05, poleH, 14),
+    matBody
+  );
+  pole.position.y = 0.13 + poleH / 2;
+  group.add(pole);
+
+  // Joint at top of pole
+  const j1y = 0.13 + poleH;
+  const joint1 = new THREE.Mesh(new THREE.SphereGeometry(0.10, 16, 12), matJoint);
+  joint1.position.y = j1y;
+  group.add(joint1);
+
+  // Forward-and-down arm. We position the cylinder at the midpoint between
+  // the joint and the arm's end point and rotate around X so the cylinder
+  // axis (local +Y) points from the joint toward the end.
+  const armDip = 0.65;
+  const armReach = 2.1;
+  const armLen = Math.hypot(armDip, armReach);
+  const armAngle = Math.acos(-armDip / armLen);
+
+  const arm = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.045, 0.045, armLen, 14),
+    matBody
+  );
+  arm.position.set(0, j1y - armDip / 2, armReach / 2);
+  arm.rotation.x = armAngle;
+  group.add(arm);
+
+  // Joint at end of arm
+  const j2y = j1y - armDip;
+  const j2z = armReach;
+  const joint2 = new THREE.Mesh(new THREE.SphereGeometry(0.10, 16, 12), matJoint);
+  joint2.position.set(0, j2y, j2z);
+  group.add(joint2);
+
+  // Shade group sits at the end joint and points the cone downward.
+  const shadeGroup = new THREE.Group();
+  shadeGroup.position.set(0, j2y, j2z);
+  shadeGroup.rotation.x = 0.35;
+  group.add(shadeGroup);
+
+  // Conical shade — wider, taller for visual presence
+  const shadeH = 0.46;
+  const shade = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.10, 0.32, shadeH, 28, 1, true),
+    matShadeOuter
+  );
+  shade.position.y = -shadeH / 2;
+  shadeGroup.add(shade);
+  // Top cap so the shade isn't see-through from above
+  const shadeCap = new THREE.Mesh(
+    new THREE.CircleGeometry(0.10, 24),
+    matShadeOuter
+  );
+  shadeCap.rotation.x = Math.PI / 2;
+  shadeCap.position.y = 0;
+  shadeGroup.add(shadeCap);
+
+  // Bulb (visual element inside the shade — the actual lighting comes from
+  // the SpotLight below)
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.10, 16, 12), matBulb);
+  bulb.position.y = -shadeH * 0.55;
+  shadeGroup.add(bulb);
+
+  // SpotLight inside the shade, pointing down through the shade opening.
+  // shadow.bias avoids the surface acne / shadow-stripe artifact common on
+  // flat receivers (the desk plane).
+  const light = new THREE.SpotLight(0xfff0c8, 12, 16, Math.PI / 3.2, 0.45, 1.6);
+  light.position.y = -shadeH * 0.55;
+  light.castShadow = true;
+  light.shadow.mapSize.set(1024, 1024);
+  light.shadow.camera.near = 0.4;
+  light.shadow.camera.far = 16;
+  light.shadow.bias = -0.0008;
+  light.shadow.radius = 4;
+  shadeGroup.add(light);
+
+  // Target several units below the shade so the SpotLight's cone aims down.
+  const target = new THREE.Object3D();
+  target.position.set(0, -8, 0);
+  shadeGroup.add(target);
+  light.target = target;
+
+  return { group, light };
+}
 
 // A stack of NON-bootable filler diskettes — just visual flavor in the
 // corner of the desk. Bootables now live on their own (see DESK_DISKS below)
