@@ -512,6 +512,9 @@ function makeKey(widthU = 1, heightU = 1, code) {
   const w = widthU * STRIDE - GAP;
   const d = heightU * STRIDE - GAP;
   const cap = new THREE.Mesh(rbox(w, KEY_HEIGHT, d, 0.012, 2), getKeyMaterial());
+  // Stamp the keycap with its code so the click raycaster can synthesize the
+  // matching KeyboardEvent without a side table.
+  cap.userData.keyCode = code;
 
   // Attach a label as a child plane, so it follows the cap when pressed.
   const labelText = code ? KEY_LABELS[code] : null;
@@ -563,7 +566,7 @@ function buildMainBlock(keyMap) {
       const x = xCur + (wU * STRIDE - GAP) / 2;
       const y = KEY_HEIGHT / 2;
       mesh.position.set(x, y, 0);
-      mesh.userData = { baseY: y, targetY: y, currentY: y };
+      mesh.userData.baseY = y; mesh.userData.targetY = y; mesh.userData.currentY = y;
       rowGroup.add(mesh);
       keyMap.set(k.code, mesh);
       xCur += wU * STRIDE;
@@ -613,7 +616,7 @@ function buildCluster(keys, keyMap) {
     const y = KEY_HEIGHT / 2;
     const z = row * STRIDE + d / 2;
     mesh.position.set(x, y, z);
-    mesh.userData = { baseY: y, targetY: y, currentY: y };
+    mesh.userData.baseY = y; mesh.userData.targetY = y; mesh.userData.currentY = y;
     group.add(mesh);
     keyMap.set(code, mesh);
   }

@@ -28,6 +28,37 @@ import { startDoom, drawDoomLoading, blitDoomCanvas } from "./screens/doom";
 // Switch to screensaver after this much idle time (no key activity)
 const IDLE_TIMEOUT_MS = 30000;
 
+// Map a KeyboardEvent.code (the physical-key identifier the 3D keymap is
+// indexed by) to a KeyboardEvent.key value. Covers every code used in the
+// computerModel keyboard layout — letters, digits, function row, numpad,
+// arrows, modifiers, punctuation, navigation cluster.
+const NAMED_KEYS = {
+  Space: " ", Enter: "Enter", Escape: "Escape", Tab: "Tab",
+  Backspace: "Backspace", Backquote: "`", Minus: "-", Equal: "=",
+  BracketLeft: "[", BracketRight: "]", Backslash: "\\",
+  Semicolon: ";", Quote: "'", Comma: ",", Period: ".", Slash: "/",
+  ShiftLeft: "Shift", ShiftRight: "Shift",
+  ControlLeft: "Control", ControlRight: "Control",
+  AltLeft: "Alt", AltRight: "Alt",
+  MetaLeft: "Meta", MetaRight: "Meta",
+  CapsLock: "CapsLock", NumLock: "NumLock", ScrollLock: "ScrollLock",
+  Insert: "Insert", Home: "Home", PageUp: "PageUp",
+  Delete: "Delete", End: "End", PageDown: "PageDown",
+  PrintScreen: "PrintScreen", Pause: "Pause", ContextMenu: "ContextMenu",
+  NumpadDecimal: ".", NumpadAdd: "+", NumpadSubtract: "-",
+  NumpadMultiply: "*", NumpadDivide: "/", NumpadEnter: "Enter",
+};
+function codeToKey(code) {
+  if (!code) return "";
+  if (code in NAMED_KEYS) return NAMED_KEYS[code];
+  if (code.startsWith("Key")) return code.slice(3).toLowerCase();
+  if (code.startsWith("Digit")) return code.slice(5);
+  if (code.startsWith("Numpad")) return code.slice(6); // Numpad0..9
+  if (code.startsWith("Arrow")) return code;
+  if (/^F\d+$/.test(code)) return code;
+  return code;
+}
+
 const IS_TOUCH = typeof window !== "undefined" &&
   ("ontouchstart" in window || (navigator?.maxTouchPoints || 0) > 0);
 
@@ -718,16 +749,23 @@ export default function Home() {
       sceneRef.current = built;
 
       // ----- Click-to-insert: raycast the floppy disks. The DOOM disk flies
-      //       to the floppy drive and boots js-dos when it gets there. -----
+      //       to the floppy drive and boots js-dos when it gets there.
+      //       Click-to-press: raycast the keyboard keycaps and synthesize
+      //       window-level keydown/keyup events for the matching code. -----
       const raycaster = new THREE.Raycaster();
       const ndc = new THREE.Vector2();
       const diskMeshes = built.floppyDisks.map((d) => d.mesh);
+      const keyMeshes = Array.from(built.keyMap.values());
 
-      function pickDisk(clientX, clientY) {
+      function setNdcFromClient(clientX, clientY) {
         const rect = renderer.domElement.getBoundingClientRect();
         ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
         ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(ndc, camera);
+      }
+
+      function pickDisk(clientX, clientY) {
+        setNdcFromClient(clientX, clientY);
         const hits = raycaster.intersectObjects(diskMeshes, true);
         if (!hits.length) return null;
         let obj = hits[0].object;
@@ -735,33 +773,70 @@ export default function Home() {
         return obj || null;
       }
 
+      function pickKeycap(clientX, clientY) {
+        setNdcFromClient(clientX, clientY);
+        const hits = raycaster.intersectObjects(keyMeshes, true);
+        if (!hits.length) return null;
+        let obj = hits[0].object;
+        while (obj && !obj.userData?.keyCode) obj = obj.parent;
+        return obj || null;
+      }
+
+      // Synthesize a real keydown then keyup on `window` for a given key
+      // code (e.g. "KeyA", "Space", "Enter"). The existing window listeners
+      // — game input, doom forwarder, keycap animator — pick it up exactly
+      // as if the user had pressed the physical key.
+      function fireSyntheticKey(code) {
+        const key = codeToKey(code);
+        const init = { key, code, bubbles: true, cancelable: true };
+        window.dispatchEvent(new KeyboardEvent("keydown", init));
+        // Brief hold so DOOM/games register a press rather than a tap that
+        // immediately ends (some engines need at least one frame of "down").
+        setTimeout(() => {
+          window.dispatchEvent(new KeyboardEvent("keyup", init));
+        }, 90);
+      }
+
       onPointerDown = (e) => {
         if (insertionRef.current) return;
-        const m = stateRef.current.mode;
-        // Only allow disk clicks when the 3D scene is the "active" surface.
-        if (m !== "menu" && m !== "game") return;
         if (stateRef.current.reveal) return;
-        const disk = pickDisk(e.clientX, e.clientY);
-        if (!disk) return;
-        if (!disk.userData.bundleUrl) {
-          // Non-bootable disk: small bounce so it feels interactive without
-          // actually doing anything.
-          disk.userData._bounce = 1;
-          return;
+
+        const m = stateRef.current.mode;
+
+        // Disks are only clickable when the 3D scene is the "active" surface
+        // (i.e. not while typing in a terminal or running a game). The disk
+        // takes priority over the keyboard if both intersect under the cursor.
+        if (m === "menu" || m === "game") {
+          const disk = pickDisk(e.clientX, e.clientY);
+          if (disk) {
+            if (!disk.userData.bundleUrl) {
+              disk.userData._bounce = 1;
+            } else {
+              startInsertion(disk);
+            }
+            return;
+          }
         }
-        startInsertion(disk);
+
+        // Keycaps are clickable in every mode that processes input — boot,
+        // menu, game, terminal, doom (clicking a key fires the real keypress
+        // into whichever handler is active). Skip on screensaver since any
+        // input there immediately exits anyway, and skip while disk-insertion
+        // is animating (already handled above).
+        if (m === "screensaver") return;
+        const cap = pickKeycap(e.clientX, e.clientY);
+        if (cap) fireSyntheticKey(cap.userData.keyCode);
       };
       renderer.domElement.addEventListener("pointerdown", onPointerDown);
 
-      // Cursor: pointer when hovering a disk in a clickable mode.
+      // Cursor: pointer when hovering a clickable object — a disk in the
+      // right mode, or any keyboard keycap otherwise.
       onCanvasMove = (e) => {
         const m = stateRef.current.mode;
-        if (m !== "menu" && m !== "game") {
-          renderer.domElement.style.cursor = "";
-          return;
-        }
-        const disk = pickDisk(e.clientX, e.clientY);
-        renderer.domElement.style.cursor = disk ? "pointer" : "";
+        let hot = false;
+        if (m === "menu" || m === "game") hot = !!pickDisk(e.clientX, e.clientY);
+        if (!hot && m !== "screensaver") hot = !!pickKeycap(e.clientX, e.clientY);
+        renderer.domElement.style.cursor = hot ? "pointer" : "";
       };
       renderer.domElement.addEventListener("pointermove", onCanvasMove);
 
