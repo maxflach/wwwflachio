@@ -1020,28 +1020,33 @@ export function buildComputerScene(pixiCanvas) {
   rim.position.set(0, 1, -4);
   root.add(rim);
 
-  // ----- Desk — finite block so the camera can see its edges fall away
-  //       to the dark backdrop instead of running to infinity. -----
+  // ----- Desk — finite block whose front edge ends well inside the camera
+  //       frame so a strip of floor is visible below it (the "the desk has
+  //       no end" problem). -----
   const deskW = 16;
-  const deskD = 9;
+  const deskD = 8;     // shorter forward → front edge clears under the camera ray
   const deskT = 0.35;
   const desk = new THREE.Mesh(
     new THREE.BoxGeometry(deskW, deskT, deskD),
     new THREE.MeshStandardMaterial({ map: tex.wood, roughness: 0.95 })
   );
-  desk.position.set(0, -deskT / 2, 1.0);
+  // z=0 center pushes the front edge to z=4 — sits just past the keyboard
+  // (~3.15), so the camera sees the keyboard, then a sliver of desk, then
+  // the front edge dropping away to the floor.
+  desk.position.set(0, -deskT / 2, 0);
   desk.receiveShadow = true;
   desk.castShadow = true;
   root.add(desk);
 
-  // Floor far below the desk, in a darker shade — gives the scene a vertical
-  // dimension and stops the off-desk space from reading as "void".
+  // Floor below the desk — colored to contrast with the warm desk wood so
+  // the strip below the desk's front edge clearly reads as a separate
+  // surface rather than more desk.
   const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(60, 60),
-    new THREE.MeshStandardMaterial({ color: 0x0e0805, roughness: 1 })
+    new THREE.PlaneGeometry(80, 80),
+    new THREE.MeshStandardMaterial({ color: 0x1a1c22, roughness: 1 })
   );
   floor.rotation.x = -Math.PI / 2;
-  floor.position.y = -3.5;
+  floor.position.y = -1.6;
   floor.receiveShadow = true;
   root.add(floor);
 

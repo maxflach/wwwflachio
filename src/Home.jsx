@@ -709,7 +709,7 @@ export default function Home() {
       // Two camera presets — landscape shows the full hero shot; portrait
       // pulls in tight on the monitor since the keyboard barely fits in 9:16.
       const PRESETS = {
-        landscape: { fov: 36, base: new THREE.Vector3(0, 5.4, 9.4), target: new THREE.Vector3(0, 0.6, 1.1) },
+        landscape: { fov: 36, base: new THREE.Vector3(0, 5.8, 9.8), target: new THREE.Vector3(0, 0.3, 1.0) },
         portrait:  { fov: 44, base: new THREE.Vector3(0, 3.2, 8.0), target: new THREE.Vector3(0, 1.8, 0.0) },
       };
       const camBase = new THREE.Vector3();
